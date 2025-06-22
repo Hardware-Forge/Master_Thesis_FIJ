@@ -1,7 +1,7 @@
 # Master_Thesis_FIJ
 
 
-##Instructions for use
+## Instructions for use
 1. open makefile and modify the name of the program
 2. run `make` command to build module
 3. run the selected program
