@@ -1,6 +1,6 @@
-obj-m += fij_mod_2.o
+obj-m += fij_mod.o
 MYAPP := test_prog  #### ----------> INSERT PROCESS EXECUTABLE NAME
-MODNAME := fij_mod_2.ko
+MODNAME := fij_mod.ko
 
 all:
 	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules
