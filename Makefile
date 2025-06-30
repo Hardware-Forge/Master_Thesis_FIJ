@@ -5,6 +5,14 @@ MODNAME := fij_mod.ko
 all:
 	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules
 
+install-module: all
+	sudo insmod $(MODNAME)
+	sleep 1
+	sudo chmod 666 /dev/fij || echo "Note: Set /dev/fij permissions manually if needed"
+
+remove-module:
+	sudo rmmod fij_mod || true
+
 clean:
 	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) clean
 
