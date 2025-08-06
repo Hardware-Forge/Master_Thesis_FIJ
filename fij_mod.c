@@ -16,6 +16,7 @@
 #include <linux/cdev.h>
 #include <linux/device.h>
 #include <linux/string.h>
+#include <linux/sched/signal.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Andrea Carbonetti");
@@ -36,9 +37,13 @@ struct fij_params {
     char process_path[256];      // e.g., "/usr/bin/myapp"
     char process_args[256];      // e.g., "arg1 arg2"
     int cycles;                  // Number of bitflips to inject (0 = infinite)
+    unsigned long target_pc;     // Target instruction pointer to wait for
 };
 
 /************** Globals **************/
+static unsigned long target_pc = 0;
+static struct task_struct *pc_monitor_thread = NULL;
+
 static struct class*  fij_class  = NULL;
 static struct device* fij_device = NULL;
 static struct cdev    fij_cdev;
@@ -155,6 +160,67 @@ cleanup:
     return ret;
 }
 
+/****************************** Program Counter Check ******************************/
+static int pc_monitor_thread_fn(void *data) {
+    struct task_struct *task;
+    struct pt_regs *regs;
+
+    while (!kthread_should_stop()) {
+        rcu_read_lock();
+       struct pid *pid_struct = find_get_pid(target_pid);
+	if (!pid_struct) {
+	    rcu_read_unlock();
+	    printk(KERN_ERR "fij: failed to get pid_struct for %d\n", target_pid);
+	    break;
+	}
+	task = pid_task(pid_struct, PIDTYPE_PID);
+	put_pid(pid_struct);
+
+	if (!task) {
+	    rcu_read_unlock();
+	    printk(KERN_ERR "fij: task %d not found (pid_task returned NULL)\n", target_pid);
+	    break;
+	}
+
+	if (!pid_alive(task) || (task->flags & PF_EXITING)) {
+	    rcu_read_unlock();
+	    printk(KERN_ERR "fij: task %d has exited or is exiting\n", target_pid);
+	    break;
+	}        if (!task) {
+            rcu_read_unlock();
+            printk(KERN_ERR "fij: task %d not found in pc_monitor_thread\n", target_pid);
+            break;
+        }
+
+       if (!pid_alive(task) || (task->flags & PF_EXITING)) {
+	    rcu_read_unlock();
+	    printk(KERN_ERR "fij: task %d has exited or is dying\n", target_pid);
+	    break;
+	}
+
+        regs = task_pt_regs(task);
+        if (regs && regs->ip == target_pc) {
+            rcu_read_unlock();
+            printk(KERN_INFO "fij: target PC 0x%lx reached by PID %d\n", target_pc, target_pid);
+            perform_bitflip();
+
+            struct pid *pid_struct = find_get_pid(target_pid);
+            if (pid_struct) {
+                send_sig(SIGCONT, pid_task(pid_struct, PIDTYPE_PID), 0);
+                put_pid(pid_struct);
+                printk(KERN_INFO "fij: sent SIGCONT to PID %d\n", target_pid);
+            }
+            break;
+        }
+
+        rcu_read_unlock();
+        msleep(10); // Tune as needed
+    }
+
+    running = 0;
+    return 0;
+}
+
 /************** Kernel Thread **************/
 static int bitflip_thread_fn(void *data) {
     while (!kthread_should_stop() && (remaining_cycles > 0 || remaining_cycles == -1)) {
@@ -230,6 +296,7 @@ case IOCTL_EXEC_AND_FAULT: {
 
     if (copy_from_user(&params, (void __user *)arg, sizeof(params)))
         return -EFAULT;
+    target_pc = params.target_pc;  // Save globally
 
     if (running)
         return -EBUSY;
@@ -288,19 +355,18 @@ case IOCTL_EXEC_AND_FAULT: {
 
     printk(KERN_INFO "fij: injecting fault into '%s' (PID %d)\n", params.process_name, target_pid);
 
+    if (target_pc == 0) {
     // Inject fault before it starts executing
     ret = perform_bitflip();
 
     // Resume execution after injection
-    {
-        struct pid *pid_struct = find_get_pid(target_pid);
-        if (pid_struct) {
-            send_sig(SIGCONT, pid_task(pid_struct, PIDTYPE_PID), 0);
-            put_pid(pid_struct);
-            printk(KERN_INFO "fij: sent SIGCONT to PID %d\n", target_pid);
-        } else {
-            printk(KERN_ERR "fij: failed to get PID struct for PID %d\n", target_pid);
-        }
+    struct pid *pid_struct = find_get_pid(target_pid);
+    if (pid_struct) {
+        send_sig(SIGCONT, pid_task(pid_struct, PIDTYPE_PID), 0);
+        put_pid(pid_struct);
+        printk(KERN_INFO "fij: sent SIGCONT to PID %d\n", target_pid);
+    } else {
+        printk(KERN_ERR "fij: failed to get PID struct for PID %d\n", target_pid);
     }
 
     // Start bitflip thread (if more cycles are needed)
@@ -313,12 +379,31 @@ case IOCTL_EXEC_AND_FAULT: {
             return PTR_ERR(bitflip_thread);
         }
     } else {
-        running = 0; // Only one injection was requested and already done
+        running = 0;
+    }
+} else {
+    // Monitor process and inject when PC matches target
+    pc_monitor_thread = kthread_run(pc_monitor_thread_fn, NULL, "pc_monitor_thread");
+    if (IS_ERR(pc_monitor_thread)) {
+        printk(KERN_ERR "fij: failed to start PC monitor thread\n");
+        running = 0;
+        kfree(path_copy);
+        return PTR_ERR(pc_monitor_thread);
     }
 
-    kfree(path_copy); // args_copy was consumed in-place
-    return ret;
+    // Resume execution immediately — fault will happen later
+    struct pid *pid_struct = find_get_pid(target_pid);
+    if (pid_struct) {
+        send_sig(SIGCONT, pid_task(pid_struct, PIDTYPE_PID), 0);
+        put_pid(pid_struct);
+        printk(KERN_INFO "fij: sent SIGCONT to PID %d\n", target_pid);
+    } else {
+        printk(KERN_ERR "fij: failed to get PID struct for PID %d\n", target_pid);
+    }
 }
+
+kfree(path_copy);
+return ret;}
     default:
         return -EINVAL;
     }
@@ -360,13 +445,24 @@ static int __init fij_init(void) {
 }
 
 static void __exit fij_exit(void) {
-    if (running && bitflip_thread) {
+    /* Signal threads to stop */
+    if (bitflip_thread) {
         kthread_stop(bitflip_thread);
+        bitflip_thread = NULL;
+    }
+    if (pc_monitor_thread) {
+        kthread_stop(pc_monitor_thread);
+        pc_monitor_thread = NULL;
     }
 
+    /* Clean up device */
     device_destroy(fij_class, MKDEV(dev_major, 0));
-    class_unregister(fij_class);
-    class_destroy(fij_class);
+    if (fij_class) {
+        class_unregister(fij_class);
+        class_destroy(fij_class);
+        fij_class = NULL;
+    }
+
     unregister_chrdev(dev_major, DEVICE_NAME);
 
     printk(KERN_INFO "fij: module unloaded\n");
@@ -374,4 +470,3 @@ static void __exit fij_exit(void) {
 
 module_init(fij_init);
 module_exit(fij_exit);
-

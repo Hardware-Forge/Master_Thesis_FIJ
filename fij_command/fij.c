@@ -15,7 +15,19 @@ struct fij_params {
     char process_path[256];     // program path
     char process_args[256];     // argument string
     int cycles;                 // fault cycles
+    unsigned long target_pc;    // new: target instruction pointer (0 = immediate)
 };
+
+/*****Helper to parse target_pc argument******/
+unsigned long parse_pc_arg(const char *arg) {
+    if (strncmp(arg, "pc=", 3) != 0)
+        return 0;
+    const char *val = arg + 3;
+    char *end;
+    unsigned long pc = strtoul(val, &end, 0); // auto-detect 0x prefix
+    return pc;
+}
+
 
 int main(int argc, char *argv[]) {
     int fd = open("/dev/fij", O_RDWR);
@@ -63,28 +75,30 @@ int main(int argc, char *argv[]) {
         }
         printf("Status: %s\n", status ? "Running" : "Idle");
     } else if (argc >= 2 && strcmp(argv[1], "exec") == 0) {
-        struct fij_params params = {0};
-        params.cycles = 0;  // default to infinite
+	struct fij_params params = {0};
+	params.cycles = 0;  // default to infinite
+	params.target_pc = 0;
 
-        for (int i = 2; i < argc; ++i) {
-            if (strncmp(argv[i], "path=", 5) == 0) {
-                strncpy(params.process_path, argv[i] + 5, sizeof(params.process_path) - 1);
-		// Auto-fill process_name from process_path (e.g., /usr/bin/echo -> echo)
+	for (int i = 2; i < argc; ++i) {
+	    if (strncmp(argv[i], "path=", 5) == 0) {
+		strncpy(params.process_path, argv[i] + 5, sizeof(params.process_path) - 1);
+		// Auto-fill process_name
 		char *last_slash = strrchr(params.process_path, '/');
 		if (last_slash)
-    		  strncpy(params.process_name, last_slash + 1, sizeof(params.process_name) - 1);
+		    strncpy(params.process_name, last_slash + 1, sizeof(params.process_name) - 1);
 		else
-    		  strncpy(params.process_name, params.process_path, sizeof(params.process_name) - 1);
-            } else if (strncmp(argv[i], "args=", 5) == 0) {
-                strncpy(params.process_args, argv[i] + 5, sizeof(params.process_args) - 1);
-            } else if (strncmp(argv[i], "cycles=", 7) == 0) {
-                params.cycles = atoi(argv[i] + 7);
-            } else {
-                fprintf(stderr, "Invalid argument: %s\n", argv[i]);
-                return 1;
-            }
-        }
-
+		    strncpy(params.process_name, params.process_path, sizeof(params.process_name) - 1);
+	    } else if (strncmp(argv[i], "args=", 5) == 0) {
+		strncpy(params.process_args, argv[i] + 5, sizeof(params.process_args) - 1);
+	    } else if (strncmp(argv[i], "cycles=", 7) == 0) {
+		params.cycles = atoi(argv[i] + 7);
+	    } else if (strncmp(argv[i], "pc=", 3) == 0) {
+		params.target_pc = parse_pc_arg(argv[i]);
+	    } else {
+		fprintf(stderr, "Invalid argument: %s\n", argv[i]);
+		return 1;
+	    }
+	}
         if (params.process_path[0] == '\0') {
             fprintf(stderr, "Missing path= argument\n");
             return 1;
