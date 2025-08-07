@@ -288,122 +288,137 @@ static long fij_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
         break;
 case IOCTL_EXEC_AND_FAULT: {
     struct fij_params params;
-    char *argv[MAX_ARGC + 2]; // binary + args + NULL
+    char *argv[MAX_ARGC + 2];
     char *envp[] = { "HOME=/", "PATH=/sbin:/usr/sbin:/bin:/usr/bin", NULL };
-    char *path_copy = NULL, *args_copy = NULL, *token = NULL;
-    int argc = 0, ret = 0;
+    char *path_copy = NULL, *args_copy = NULL, *token;
+    int argc = 0, ret;
     struct subprocess_info *sub_info;
 
+    /* 1) grab user params */
     if (copy_from_user(&params, (void __user *)arg, sizeof(params)))
         return -EFAULT;
-    target_pc = params.target_pc;  // Save globally
 
+    /* not allowed to re-enter */
     if (running)
         return -EBUSY;
 
-    // Set cycles
+    /* prepare globals */
     remaining_cycles = (params.cycles == 0) ? -1 : params.cycles;
     running = 1;
 
+    /* 2) build argv[] */
     path_copy = kstrdup(params.process_path, GFP_KERNEL);
-    if (!path_copy)
+    if (!path_copy) {
+        running = 0;
         return -ENOMEM;
-
-    // Construct argv[]
+    }
     argv[argc++] = path_copy;
 
     if (params.process_args[0]) {
         args_copy = kstrdup(params.process_args, GFP_KERNEL);
         if (!args_copy) {
             kfree(path_copy);
+            running = 0;
             return -ENOMEM;
         }
-
-        while ((token = strsep(&args_copy, " ")) != NULL && argc < MAX_ARGC + 1) {
-            if (*token == '\0') continue;
-            argv[argc++] = token;
+        while ((token = strsep(&args_copy, " ")) && argc < MAX_ARGC+1) {
+            if (*token)
+                argv[argc++] = token;
         }
     }
-
     argv[argc] = NULL;
 
-    sub_info = call_usermodehelper_setup(path_copy, argv, envp, GFP_KERNEL,
-                                         helper_child_init, NULL, NULL);
+    /* 3) fork+exec, child will SIGSTOP in helper_child_init */
+    sub_info = call_usermodehelper_setup(
+        path_copy, argv, envp, GFP_KERNEL,
+        helper_child_init, /* no prep_fn */ NULL, /* no data */ NULL
+    );
     if (!sub_info) {
         kfree(path_copy);
+        running = 0;
         return -ENOMEM;
     }
-
     ret = call_usermodehelper_exec(sub_info, UMH_WAIT_EXEC);
     if (ret) {
-        printk(KERN_ERR "fij: usermodehelper_exec failed (%d)\n", ret);
-        running = 0;
+        printk(KERN_ERR "fij: exec failed (%d)\n", ret);
         kfree(path_copy);
+        running = 0;
         return ret;
     }
 
-    // At this point, the child is paused (SIGSTOP), and exec hasn't run yet
-
-    // Find the PID by process name
+    /* 4) child is now SIGSTOPPED — find its PID */
     target_pid = find_pid_by_name(params.process_name);
     if (target_pid < 0) {
-        printk(KERN_ERR "fij: launched process '%s' not found\n", params.process_name);
-        running = 0;
+        printk(KERN_ERR "fij: launched '%s' not found\n", params.process_name);
         kfree(path_copy);
+        running = 0;
         return -ESRCH;
     }
+    printk(KERN_INFO "fij: launched '%s' (PID %d)\n",
+           params.process_name, target_pid);
 
-    printk(KERN_INFO "fij: injecting fault into '%s' (PID %d)\n", params.process_name, target_pid);
-
-    if (target_pc == 0) {
-    // Inject fault before it starts executing
-    ret = perform_bitflip();
-
-    // Resume execution after injection
-    struct pid *pid_struct = find_get_pid(target_pid);
-    if (pid_struct) {
-        send_sig(SIGCONT, pid_task(pid_struct, PIDTYPE_PID), 0);
-        put_pid(pid_struct);
-        printk(KERN_INFO "fij: sent SIGCONT to PID %d\n", target_pid);
+    /* 5) compute absolute injection address */
+    if (params.target_pc) {
+        struct pid *p_tmp = find_get_pid(target_pid);
+        if (!p_tmp) {
+            kfree(path_copy);
+            running = 0;
+            return -ESRCH;
+        }
+        {
+            struct task_struct *t = pid_task(p_tmp, PIDTYPE_PID);
+            struct mm_struct   *m = t ? get_task_mm(t) : NULL;
+            if (!t || !m) {
+                put_pid(p_tmp);
+                kfree(path_copy);
+                running = 0;
+                return -EFAULT;
+            }
+            target_pc = m->start_code + params.target_pc;
+            mmput(m);
+        }
+        put_pid(p_tmp);
     } else {
-        printk(KERN_ERR "fij: failed to get PID struct for PID %d\n", target_pid);
+        /* inject before first exec instruction */
+        target_pc = 0;
     }
 
-    // Start bitflip thread (if more cycles are needed)
-    if (remaining_cycles != 1) {
-        bitflip_thread = kthread_run(bitflip_thread_fn, NULL, "bitflip_thread");
-        if (IS_ERR(bitflip_thread)) {
-            printk(KERN_ERR "fij: failed to start bitflip thread\n");
+    /* 6) resume the child now that target_pc is set */
+    {
+        struct pid *p = find_get_pid(target_pid);
+        if (p) {
+            send_sig(SIGCONT, pid_task(p, PIDTYPE_PID), 0);
+            put_pid(p);
+            printk(KERN_INFO "fij: SIGCONT → PID %d\n", target_pid);
+        }
+    }
+
+    /* 7) do the injection: immediate if target_pc==0, else spin in thread */
+    if (target_pc == 0) {
+        ret = perform_bitflip();
+        /* maybe start periodic if cycles >1 (or infinite) */
+        if (remaining_cycles != 1) {
+            bitflip_thread = kthread_run(bitflip_thread_fn, NULL, "bitflip_thread");
+            if (IS_ERR(bitflip_thread)) {
+                printk(KERN_ERR "fij: failed to start bitflip thread\n");
+                running = 0;
+                ret = PTR_ERR(bitflip_thread);
+            }
+        } else {
             running = 0;
-            kfree(path_copy);
-            return PTR_ERR(bitflip_thread);
         }
     } else {
-        running = 0;
-    }
-} else {
-    // Monitor process and inject when PC matches target
-    pc_monitor_thread = kthread_run(pc_monitor_thread_fn, NULL, "pc_monitor_thread");
-    if (IS_ERR(pc_monitor_thread)) {
-        printk(KERN_ERR "fij: failed to start PC monitor thread\n");
-        running = 0;
-        kfree(path_copy);
-        return PTR_ERR(pc_monitor_thread);
+        pc_monitor_thread = kthread_run(pc_monitor_thread_fn, NULL, "pc_monitor_thread");
+        if (IS_ERR(pc_monitor_thread)) {
+            printk(KERN_ERR "fij: failed to start PC monitor thread\n");
+            running = 0;
+            ret = PTR_ERR(pc_monitor_thread);
+        }
     }
 
-    // Resume execution immediately — fault will happen later
-    struct pid *pid_struct = find_get_pid(target_pid);
-    if (pid_struct) {
-        send_sig(SIGCONT, pid_task(pid_struct, PIDTYPE_PID), 0);
-        put_pid(pid_struct);
-        printk(KERN_INFO "fij: sent SIGCONT to PID %d\n", target_pid);
-    } else {
-        printk(KERN_ERR "fij: failed to get PID struct for PID %d\n", target_pid);
-    }
+    kfree(path_copy);
+    return ret;
 }
-
-kfree(path_copy);
-return ret;}
     default:
         return -EINVAL;
     }
