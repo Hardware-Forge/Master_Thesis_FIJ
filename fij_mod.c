@@ -13,10 +13,13 @@
 #include <linux/delay.h>
 #include <linux/fs.h>
 #include <linux/uaccess.h>
-#include <linux/cdev.h>
 #include <linux/device.h>
 #include <linux/string.h>
 #include <linux/sched/signal.h>
+#include <linux/uprobes.h>
+#include <linux/ptrace.h>
+#include <linux/types.h>
+#include <linux/kmod.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Andrea Carbonetti");
@@ -27,38 +30,48 @@ MODULE_VERSION("0.2");
 #define CLASS_NAME  "fij_class"
 #define MAX_ARGC 6
 
-#define IOCTL_START_FAULT  _IOW('f', 1, struct fij_params)
-#define IOCTL_STOP_FAULT   _IO('f', 2)
-#define IOCTL_GET_STATUS   _IOR('f', 3, int)
-#define IOCTL_EXEC_AND_FAULT _IOW('f', 4, struct fij_params)
+#define IOCTL_START_FAULT     _IOW('f', 1, struct fij_params)
+#define IOCTL_STOP_FAULT      _IO('f', 2)
+#define IOCTL_GET_STATUS      _IOR('f', 3, int)
+#define IOCTL_EXEC_AND_FAULT  _IOW('f', 4, struct fij_params)
 
 struct fij_params {
     char process_name[256];
-    char process_path[256];      // e.g., "/usr/bin/myapp"
-    char process_args[256];      // e.g., "arg1 arg2"
-    int cycles;                  // Number of bitflips to inject (0 = infinite)
-    unsigned long target_pc;     // Target instruction pointer to wait for
+    char process_path[256];
+    char process_args[256];
+    int  cycles;                 // 0 = infinite
+    unsigned long target_pc;     // offset from start_code
 };
 
 /************** Globals **************/
-static unsigned long target_pc = 0;
-static struct task_struct *pc_monitor_thread = NULL;
+static struct uprobe_consumer inj_uc;
+static struct inode *inj_inode;
+static struct uprobe *inj_uprobe;   /* handle returned by uprobe_register() */
+static loff_t inj_off;
+static bool uprobe_active;
 
-static struct class*  fij_class  = NULL;
-static struct device* fij_device = NULL;
-static struct cdev    fij_cdev;
-static int    dev_major;
+static unsigned long target_pc;
+static struct task_struct *pc_monitor_thread;
 
-static struct task_struct *bitflip_thread = NULL;
-static int running = 0;
-static int remaining_cycles = 0;
+static struct class *fij_class;
+static struct device *fij_device;
+static int dev_major;
+
+static struct task_struct *bitflip_thread;
+static int running;
+static int remaining_cycles;
 static pid_t target_pid = -1;
 static unsigned long interval_ms = 1000;
 module_param(interval_ms, ulong, 0644);
 MODULE_PARM_DESC(interval_ms, "Delay between bitflips (ms)");
 
+/* Forward declarations */
+static int bitflip_thread_fn(void *data);
+static int uprobe_hit(struct uprobe_consumer *uc, struct pt_regs *regs, u64 *bp_addr);
+
 /************** Function: Find PID by name **************/
-static pid_t find_pid_by_name(const char *name) {
+static pid_t find_pid_by_name(const char *name)
+{
     struct task_struct *task;
     for_each_process(task) {
         if (strcmp(task->comm, name) == 0)
@@ -68,7 +81,8 @@ static pid_t find_pid_by_name(const char *name) {
 }
 
 /************** Function: Perform Bitflip **************/
-static int perform_bitflip(void) {
+static int perform_bitflip(void)
+{
     struct task_struct *task;
     struct mm_struct *mm = NULL;
     struct vm_area_struct *vma = NULL;
@@ -143,7 +157,8 @@ static int perform_bitflip(void) {
     bit_to_flip = get_random_u32() % 8;
     flipped_byte = orig_byte ^ (1 << bit_to_flip);
 
-    bytes_written = access_process_vm(task, target_addr, &flipped_byte, 1, FOLL_WRITE | FOLL_FORCE);
+    bytes_written = access_process_vm(task, target_addr, &flipped_byte, 1,
+                                      FOLL_WRITE | FOLL_FORCE);
     if (bytes_written != 1) {
         ret = -EFAULT;
         goto cleanup;
@@ -160,69 +175,82 @@ cleanup:
     return ret;
 }
 
-/****************************** Program Counter Check ******************************/
-static int pc_monitor_thread_fn(void *data) {
-    struct task_struct *task;
-    struct pt_regs *regs;
+/************************* File offset Helper *****************/
+static int va_to_file_off(struct task_struct *t, unsigned long va,
+                          struct inode **out_inode, loff_t *out_off)
+{
+    struct mm_struct *mm = get_task_mm(t);
+    struct vm_area_struct *vma;
+    int found = 0;
 
-    while (!kthread_should_stop()) {
-        rcu_read_lock();
-       struct pid *pid_struct = find_get_pid(target_pid);
-	if (!pid_struct) {
-	    rcu_read_unlock();
-	    printk(KERN_ERR "fij: failed to get pid_struct for %d\n", target_pid);
-	    break;
-	}
-	task = pid_task(pid_struct, PIDTYPE_PID);
-	put_pid(pid_struct);
+    if (!mm)
+        return -ESRCH;
 
-	if (!task) {
-	    rcu_read_unlock();
-	    printk(KERN_ERR "fij: task %d not found (pid_task returned NULL)\n", target_pid);
-	    break;
-	}
-
-	if (!pid_alive(task) || (task->flags & PF_EXITING)) {
-	    rcu_read_unlock();
-	    printk(KERN_ERR "fij: task %d has exited or is exiting\n", target_pid);
-	    break;
-	}        if (!task) {
-            rcu_read_unlock();
-            printk(KERN_ERR "fij: task %d not found in pc_monitor_thread\n", target_pid);
-            break;
-        }
-
-       if (!pid_alive(task) || (task->flags & PF_EXITING)) {
-	    rcu_read_unlock();
-	    printk(KERN_ERR "fij: task %d has exited or is dying\n", target_pid);
-	    break;
-	}
-
-        regs = task_pt_regs(task);
-        if (regs && regs->ip == target_pc) {
-            rcu_read_unlock();
-            printk(KERN_INFO "fij: target PC 0x%lx reached by PID %d\n", target_pc, target_pid);
-            perform_bitflip();
-
-            struct pid *pid_struct = find_get_pid(target_pid);
-            if (pid_struct) {
-                send_sig(SIGCONT, pid_task(pid_struct, PIDTYPE_PID), 0);
-                put_pid(pid_struct);
-                printk(KERN_INFO "fij: sent SIGCONT to PID %d\n", target_pid);
+    mmap_read_lock(mm);
+    {
+        VMA_ITERATOR(vmi, mm, 0);
+        for_each_vma(vmi, vma) {
+            if (!vma->vm_file)
+                continue;
+            if (mm->exe_file && vma->vm_file == mm->exe_file &&
+                va >= vma->vm_start && va < vma->vm_end) {
+                loff_t file_off = (va - vma->vm_start)
+                                  + ((loff_t)vma->vm_pgoff << PAGE_SHIFT);
+                *out_inode = igrab(file_inode(vma->vm_file));
+                *out_off   = file_off;
+                found = 1;
+                break;
             }
-            break;
         }
+    }
+    mmap_read_unlock(mm);
+    mmput(mm);
 
-        rcu_read_unlock();
-        msleep(10); // Tune as needed
+    return found ? 0 : -ENOENT;
+}
+
+/************************ Program Probe for PC monitoring **********************/
+static int uprobe_hit(struct uprobe_consumer *uc, struct pt_regs *regs, u64 *bp_addr)
+{
+    if (current->pid != target_pid)
+        return 0;  // limit to our child (optional if you use .filter)
+
+    perform_bitflip();
+
+    /* One-shot: unregister immediately */
+    if (uprobe_active && inj_uprobe) {
+        /* remove our consumer from this uprobe */
+        uprobe_unregister_nosync(inj_uprobe, &inj_uc);
+        uprobe_unregister_sync();  /* wait for in-flight handlers */
+
+        inj_uprobe = NULL;
+        if (inj_inode) {
+            iput(inj_inode);
+            inj_inode = NULL;
+        }
+        uprobe_active = false;
     }
 
-    running = 0;
+    // If user asked for more than one flip, kick off the periodic thread
+    if (remaining_cycles != 1) {
+        if (!bitflip_thread || IS_ERR(bitflip_thread)) {
+            bitflip_thread = kthread_run(bitflip_thread_fn, NULL, "bitflip_thread");
+            if (IS_ERR(bitflip_thread)) {
+                printk(KERN_ERR "fij: failed to start bitflip thread after uprobe\n");
+                running = 0;
+            }
+        }
+    } else {
+        running = 0;
+    }
+
     return 0;
 }
 
+
 /************** Kernel Thread **************/
-static int bitflip_thread_fn(void *data) {
+static int bitflip_thread_fn(void *data)
+{
     while (!kthread_should_stop() && (remaining_cycles > 0 || remaining_cycles == -1)) {
         perform_bitflip();
         if (remaining_cycles > 0)
@@ -234,14 +262,17 @@ static int bitflip_thread_fn(void *data) {
     return 0;
 }
 
-    /************** Inject SIGSTOP Before Exec **************/
-    static int helper_child_init(struct subprocess_info *info, struct cred *new) {
-        // This executes in the child process context before exec
-        send_sig(SIGSTOP, current, 0);  // Stop self
-        return 0;
-    }
+/************** Inject SIGSTOP Before Exec **************/
+static int helper_child_init(struct subprocess_info *info, struct cred *new)
+{
+    /* This executes in the child process context before exec */
+    send_sig(SIGSTOP, current, 0);  // Stop self
+    return 0;
+}
+
 /************** IOCTL Handler **************/
-static long fij_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
+static long fij_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
     struct fij_params params;
 
     switch (cmd) {
@@ -260,7 +291,7 @@ static long fij_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
             return -EBUSY;
         }
 
-	remaining_cycles = (params.cycles == 0) ? -1 : params.cycles;
+        remaining_cycles = (params.cycles == 0) ? -1 : params.cycles;
         running = 1;
 
         bitflip_thread = kthread_run(bitflip_thread_fn, NULL, "bitflip_thread");
@@ -277,6 +308,7 @@ static long fij_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
     case IOCTL_STOP_FAULT:
         if (running && bitflip_thread) {
             kthread_stop(bitflip_thread);
+            bitflip_thread = NULL;
             running = 0;
             printk(KERN_INFO "fij: fault injection stopped manually\n");
         }
@@ -286,139 +318,158 @@ static long fij_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
         if (put_user(running, (int __user *)arg))
             return -EFAULT;
         break;
-case IOCTL_EXEC_AND_FAULT: {
-    struct fij_params params;
-    char *argv[MAX_ARGC + 2];
-    char *envp[] = { "HOME=/", "PATH=/sbin:/usr/sbin:/bin:/usr/bin", NULL };
-    char *path_copy = NULL, *args_copy = NULL, *token;
-    int argc = 0, ret;
-    struct subprocess_info *sub_info;
 
-    /* 1) grab user params */
-    if (copy_from_user(&params, (void __user *)arg, sizeof(params)))
-        return -EFAULT;
+    case IOCTL_EXEC_AND_FAULT: {
+        char *argv[MAX_ARGC + 2];
+        char *envp[] = { "HOME=/", "PATH=/sbin:/usr/sbin:/bin:/usr/bin", NULL };
+        char *path_copy = NULL, *args_copy = NULL, *token;
+        int argc = 0, ret;
+        struct subprocess_info *sub_info;
 
-    /* not allowed to re-enter */
-    if (running)
-        return -EBUSY;
+        if (copy_from_user(&params, (void __user *)arg, sizeof(params)))
+            return -EFAULT;
 
-    /* prepare globals */
-    remaining_cycles = (params.cycles == 0) ? -1 : params.cycles;
-    running = 1;
+        if (running)
+            return -EBUSY;
 
-    /* 2) build argv[] */
-    path_copy = kstrdup(params.process_path, GFP_KERNEL);
-    if (!path_copy) {
-        running = 0;
-        return -ENOMEM;
-    }
-    argv[argc++] = path_copy;
+        remaining_cycles = (params.cycles == 0) ? -1 : params.cycles;
+        running = 1;
 
-    if (params.process_args[0]) {
-        args_copy = kstrdup(params.process_args, GFP_KERNEL);
-        if (!args_copy) {
+        path_copy = kstrdup(params.process_path, GFP_KERNEL);
+        if (!path_copy) {
+            running = 0;
+            return -ENOMEM;
+        }
+        argv[argc++] = path_copy;
+
+        if (params.process_args[0]) {
+            args_copy = kstrdup(params.process_args, GFP_KERNEL);
+            if (!args_copy) {
+                kfree(path_copy);
+                running = 0;
+                return -ENOMEM;
+            }
+            while ((token = strsep(&args_copy, " ")) && argc < MAX_ARGC + 1) {
+                if (*token)
+                    argv[argc++] = token;
+            }
+        }
+        argv[argc] = NULL;
+
+        sub_info = call_usermodehelper_setup(
+            path_copy, argv, envp, GFP_KERNEL,
+            helper_child_init, NULL, NULL
+        );
+        if (!sub_info) {
             kfree(path_copy);
             running = 0;
             return -ENOMEM;
         }
-        while ((token = strsep(&args_copy, " ")) && argc < MAX_ARGC+1) {
-            if (*token)
-                argv[argc++] = token;
+        ret = call_usermodehelper_exec(sub_info, UMH_WAIT_EXEC);
+        if (ret) {
+            printk(KERN_ERR "fij: exec failed (%d)\n", ret);
+            kfree(path_copy);
+            running = 0;
+            return ret;
         }
-    }
-    argv[argc] = NULL;
 
-    /* 3) fork+exec, child will SIGSTOP in helper_child_init */
-    sub_info = call_usermodehelper_setup(
-        path_copy, argv, envp, GFP_KERNEL,
-        helper_child_init, /* no prep_fn */ NULL, /* no data */ NULL
-    );
-    if (!sub_info) {
-        kfree(path_copy);
-        running = 0;
-        return -ENOMEM;
-    }
-    ret = call_usermodehelper_exec(sub_info, UMH_WAIT_EXEC);
-    if (ret) {
-        printk(KERN_ERR "fij: exec failed (%d)\n", ret);
-        kfree(path_copy);
-        running = 0;
-        return ret;
-    }
-
-    /* 4) child is now SIGSTOPPED — find its PID */
-    target_pid = find_pid_by_name(params.process_name);
-    if (target_pid < 0) {
-        printk(KERN_ERR "fij: launched '%s' not found\n", params.process_name);
-        kfree(path_copy);
-        running = 0;
-        return -ESRCH;
-    }
-    printk(KERN_INFO "fij: launched '%s' (PID %d)\n",
-           params.process_name, target_pid);
-
-    /* 5) compute absolute injection address */
-    if (params.target_pc) {
-        struct pid *p_tmp = find_get_pid(target_pid);
-        if (!p_tmp) {
+        target_pid = find_pid_by_name(params.process_name);
+        if (target_pid < 0) {
+            printk(KERN_ERR "fij: launched '%s' not found\n", params.process_name);
             kfree(path_copy);
             running = 0;
             return -ESRCH;
         }
-        {
-            struct task_struct *t = pid_task(p_tmp, PIDTYPE_PID);
-            struct mm_struct   *m = t ? get_task_mm(t) : NULL;
+        printk(KERN_INFO "fij: launched '%s' (PID %d)\n",
+               params.process_name, target_pid);
+
+        if (params.target_pc) {
+            struct pid *p_tmp = find_get_pid(target_pid);
+            struct task_struct *t = p_tmp ? pid_task(p_tmp, PIDTYPE_PID) : NULL;
+            struct mm_struct *m = t ? get_task_mm(t) : NULL;
+
             if (!t || !m) {
-                put_pid(p_tmp);
+                if (m) mmput(m);
+                if (p_tmp) put_pid(p_tmp);
                 kfree(path_copy);
                 running = 0;
                 return -EFAULT;
             }
             target_pc = m->start_code + params.target_pc;
             mmput(m);
-        }
-        put_pid(p_tmp);
-    } else {
-        /* inject before first exec instruction */
-        target_pc = 0;
-    }
-
-    /* 6) resume the child now that target_pc is set */
-    {
-        struct pid *p = find_get_pid(target_pid);
-        if (p) {
-            send_sig(SIGCONT, pid_task(p, PIDTYPE_PID), 0);
-            put_pid(p);
-            printk(KERN_INFO "fij: SIGCONT → PID %d\n", target_pid);
-        }
-    }
-
-    /* 7) do the injection: immediate if target_pc==0, else spin in thread */
-    if (target_pc == 0) {
-        ret = perform_bitflip();
-        /* maybe start periodic if cycles >1 (or infinite) */
-        if (remaining_cycles != 1) {
-            bitflip_thread = kthread_run(bitflip_thread_fn, NULL, "bitflip_thread");
-            if (IS_ERR(bitflip_thread)) {
-                printk(KERN_ERR "fij: failed to start bitflip thread\n");
-                running = 0;
-                ret = PTR_ERR(bitflip_thread);
-            }
+            put_pid(p_tmp);
         } else {
-            running = 0;
+            target_pc = 0;
         }
-    } else {
-        pc_monitor_thread = kthread_run(pc_monitor_thread_fn, NULL, "pc_monitor_thread");
-        if (IS_ERR(pc_monitor_thread)) {
-            printk(KERN_ERR "fij: failed to start PC monitor thread\n");
-            running = 0;
-            ret = PTR_ERR(pc_monitor_thread);
+
+        if (target_pc != 0) {
+            struct pid *p = find_get_pid(target_pid);
+            struct task_struct *t = p ? pid_task(p, PIDTYPE_PID) : NULL;
+            int err = 0;
+
+            if (!t) {
+                if (p) put_pid(p);
+                kfree(path_copy);
+                running = 0;
+                return -ESRCH;
+            }
+
+            err = va_to_file_off(t, target_pc, &inj_inode, &inj_off);
+            put_pid(p);
+            if (err) {
+                printk(KERN_ERR "fij: could not map VA 0x%lx to file offset (%d)\n", target_pc, err);
+                kfree(path_copy);
+                running = 0;
+                return err;
+            }
+
+            inj_uc.handler = uprobe_hit;
+            inj_uc.ret_handler = NULL;
+            inj_uc.filter = NULL;
+
+            inj_uprobe = uprobe_register(inj_inode, inj_off, 0, &inj_uc);
+            if (IS_ERR(inj_uprobe)) {
+                err = PTR_ERR(inj_uprobe);
+                printk(KERN_ERR "fij: uprobe_register failed (%d)\n", err);
+                iput(inj_inode);
+                inj_inode = NULL;
+                inj_uprobe = NULL;
+                kfree(path_copy);
+                running = 0;
+                return err;
+            }
+            uprobe_active = true;
         }
+
+        {
+            struct pid *p = find_get_pid(target_pid);
+            if (p) {
+                send_sig(SIGCONT, pid_task(p, PIDTYPE_PID), 0);
+                put_pid(p);
+                printk(KERN_INFO "fij: SIGCONT → PID %d\n", target_pid);
+            }
+        }
+
+        if (target_pc == 0) {
+            int ret2 = perform_bitflip();
+            if (ret2)
+                printk(KERN_ERR "fij: immediate bitflip failed (%d)\n", ret2);
+
+            if (remaining_cycles != 1) {
+                bitflip_thread = kthread_run(bitflip_thread_fn, NULL, "bitflip_thread");
+                if (IS_ERR(bitflip_thread)) {
+                    printk(KERN_ERR "fij: failed to start bitflip thread\n");
+                    running = 0;
+                }
+            } else {
+                running = 0;
+            }
+        }
+
+        kfree(path_copy);
+        break;
     }
 
-    kfree(path_copy);
-    return ret;
-}
     default:
         return -EINVAL;
     }
@@ -427,22 +478,25 @@ case IOCTL_EXEC_AND_FAULT: {
 }
 
 /************** File Operations **************/
-static struct file_operations fops = {
-    .owner = THIS_MODULE,
+static const struct file_operations fops = {
+    .owner          = THIS_MODULE,
     .unlocked_ioctl = fij_ioctl,
 };
 
 /************** Init / Exit **************/
-static int __init fij_init(void) {
-    int ret;
-
+static int __init fij_init(void)
+{
     dev_major = register_chrdev(0, DEVICE_NAME, &fops);
     if (dev_major < 0) {
         printk(KERN_ALERT "fij: failed to register char device\n");
         return dev_major;
     }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)
     fij_class = class_create(CLASS_NAME);
+#else
+    fij_class = class_create(THIS_MODULE, CLASS_NAME);
+#endif
     if (IS_ERR(fij_class)) {
         unregister_chrdev(dev_major, DEVICE_NAME);
         return PTR_ERR(fij_class);
@@ -455,12 +509,20 @@ static int __init fij_init(void) {
         return PTR_ERR(fij_device);
     }
 
+    inj_inode = NULL;
+    inj_uprobe = NULL;
+    uprobe_active = false;
+    bitflip_thread = NULL;
+    pc_monitor_thread = NULL;
+    running = 0;
+    remaining_cycles = 0;
+
     printk(KERN_INFO "fij: module loaded. Use /dev/%s to control it.\n", DEVICE_NAME);
     return 0;
 }
 
-static void __exit fij_exit(void) {
-    /* Signal threads to stop */
+static void __exit fij_exit(void)
+{
     if (bitflip_thread) {
         kthread_stop(bitflip_thread);
         bitflip_thread = NULL;
@@ -470,7 +532,19 @@ static void __exit fij_exit(void) {
         pc_monitor_thread = NULL;
     }
 
-    /* Clean up device */
+    if (uprobe_active && inj_uprobe) {
+        /* remove our consumer and wait for in-flight handlers to finish */
+        uprobe_unregister_nosync(inj_uprobe, &inj_uc);
+        uprobe_unregister_sync();
+        inj_uprobe = NULL;
+        uprobe_active = false;
+    }
+
+    if (inj_inode) {
+        iput(inj_inode);
+        inj_inode = NULL;
+    }
+
     device_destroy(fij_class, MKDEV(dev_major, 0));
     if (fij_class) {
         class_unregister(fij_class);
@@ -479,9 +553,10 @@ static void __exit fij_exit(void) {
     }
 
     unregister_chrdev(dev_major, DEVICE_NAME);
-
-    printk(KERN_INFO "fij: module unloaded\n");
+    pr_info("fij: module unloaded\n");
 }
+
 
 module_init(fij_init);
 module_exit(fij_exit);
+
