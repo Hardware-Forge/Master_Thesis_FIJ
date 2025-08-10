@@ -20,6 +20,7 @@
 #include <linux/ptrace.h>
 #include <linux/types.h>
 #include <linux/kmod.h>
+#include <linux/workqueue.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Andrea Carbonetti");
@@ -60,10 +61,15 @@ static int dev_major;
 static struct task_struct *bitflip_thread;
 static int running;
 static int remaining_cycles;
-static pid_t target_pid = -1;
+static pid_t target_tgid = -1; // target group id
 static unsigned long interval_ms = 1000;
 module_param(interval_ms, ulong, 0644);
 MODULE_PARM_DESC(interval_ms, "Delay between bitflips (ms)");
+
+// Uprobe disarm vars
+static void uprobe_disarm_fn(struct work_struct *work);
+static DECLARE_WORK(uprobe_disarm_work, uprobe_disarm_fn);
+static atomic_t uprobe_disarm_queued = ATOMIC_INIT(0);
 
 /* Forward declarations */
 static int bitflip_thread_fn(void *data);
@@ -80,7 +86,79 @@ static pid_t find_pid_by_name(const char *name)
     return -1;
 }
 
-/************** Function: Perform Bitflip **************/
+/****************** Monitor process ******************************/
+static int monitor_thread_fn(void *data)
+{
+    struct task_struct *leader = (struct task_struct *)data;
+    int exit_code = 0;
+    bool exited = false;
+
+    /* Wait until the task sets exit_state */
+    while (!kthread_should_stop()) {
+        if (READ_ONCE(leader->exit_state)) {
+            exit_code = READ_ONCE(leader->exit_code);
+            exited = true;
+            break;
+        }
+        msleep(50);
+    }
+
+    /* Stop periodic injector if it’s still running */
+    if (bitflip_thread) {
+        kthread_stop(bitflip_thread);
+        bitflip_thread = NULL;
+    }
+
+    /* Make sure any active uprobe is gone */
+    if (uprobe_active && inj_uprobe) {
+        uprobe_unregister_nosync(inj_uprobe, &inj_uc);
+        uprobe_unregister_sync();
+        inj_uprobe = NULL;
+        uprobe_active = false;
+    }
+    if (inj_inode) {
+        iput(inj_inode);
+        inj_inode = NULL;
+    }
+
+    /* Transition to idle now */
+    running = 0;
+
+    if (exited) {
+        int sig = exit_code & 0x7f;
+        bool coredump = !!(exit_code & 0x80);
+        int status = (exit_code >> 8) & 0xff;
+
+        if (sig)
+            printk(KERN_INFO "fij: TGID %d terminated by signal %d%s\n",
+                   target_tgid, sig, coredump ? " (core)" : "");
+        else
+            printk(KERN_INFO "fij: TGID %d exited with status %d\n",
+                   target_tgid, status);
+    } else {
+        printk(KERN_INFO "fij: monitor thread stopped before target exited\n");
+    }
+
+    put_task_struct(leader);  /* drop our ref */
+    return 0;
+}
+
+/*************** Uprobe disarm function to quit at program exit ****************/
+static void uprobe_disarm_fn(struct work_struct *work)
+{
+    if (uprobe_active && inj_uprobe) {
+        uprobe_unregister_nosync(inj_uprobe, &inj_uc);
+        uprobe_unregister_sync();   /* safe here; handler already returned */
+        inj_uprobe = NULL;
+        uprobe_active = false;
+    }
+    if (inj_inode) {
+        iput(inj_inode);
+        inj_inode = NULL;
+    }
+}
+
+/************** Perform Bitflip **************/
 static int perform_bitflip(void)
 {
     struct task_struct *task;
@@ -93,18 +171,19 @@ static int perform_bitflip(void)
     int ret = 0;
 
     rcu_read_lock();
-    task = pid_task(find_vpid(target_pid), PIDTYPE_PID);
+    /* Use the group leader for the address space; all threads share mm */
+    task = pid_task(find_vpid(target_tgid), PIDTYPE_TGID);
     if (!task) {
         rcu_read_unlock();
-        printk(KERN_ERR "fij: PID %d not found\n", target_pid);
-        return -ESRCH;
+       printk(KERN_ERR "fij: TGID %d not found\n", target_tgid);
+       return -ESRCH;
     }
     get_task_struct(task);
     rcu_read_unlock();
 
     mm = get_task_mm(task);
     if (!mm) {
-        printk(KERN_ERR "fij: failed to get mm for PID %d\n", target_pid);
+        printk(KERN_ERR "fij: failed to get mm for PID %d\n", target_tgid);
         ret = -EINVAL;
         goto cleanup;
     }
@@ -164,9 +243,8 @@ static int perform_bitflip(void)
         goto cleanup;
     }
 
-    printk(KERN_INFO "fij: bit flipped at 0x%lx (PID %d): 0x%02x -> 0x%02x\n",
-           target_addr, target_pid, orig_byte, flipped_byte);
-
+    printk(KERN_INFO "fij: bit flipped at 0x%lx (TGID %d): 0x%02x -> 0x%02x\n",
+          target_addr, target_tgid, orig_byte, flipped_byte);
 cleanup:
     if (mm)
         mmput(mm);
@@ -212,38 +290,27 @@ static int va_to_file_off(struct task_struct *t, unsigned long va,
 /************************ Program Probe for PC monitoring **********************/
 static int uprobe_hit(struct uprobe_consumer *uc, struct pt_regs *regs, u64 *bp_addr)
 {
-    if (current->pid != target_pid)
-        return 0;  // limit to our child (optional if you use .filter)
+    /* Allow any thread of the target process */
+    if (current->tgid != target_tgid)
+           return 0;  // limit to our child (optional if you use .filter)
 
     perform_bitflip();
 
     /* One-shot: unregister immediately */
-    if (uprobe_active && inj_uprobe) {
-        /* remove our consumer from this uprobe */
-        uprobe_unregister_nosync(inj_uprobe, &inj_uc);
-        uprobe_unregister_sync();  /* wait for in-flight handlers */
-
-        inj_uprobe = NULL;
-        if (inj_inode) {
-            iput(inj_inode);
-            inj_inode = NULL;
-        }
-        uprobe_active = false;
-    }
-
+	if (uprobe_active && inj_uprobe) {
+	    if (atomic_xchg(&uprobe_disarm_queued, 1) == 0)
+		schedule_work(&uprobe_disarm_work);
+	}
     // If user asked for more than one flip, kick off the periodic thread
     if (remaining_cycles != 1) {
         if (!bitflip_thread || IS_ERR(bitflip_thread)) {
             bitflip_thread = kthread_run(bitflip_thread_fn, NULL, "bitflip_thread");
             if (IS_ERR(bitflip_thread)) {
                 printk(KERN_ERR "fij: failed to start bitflip thread after uprobe\n");
-                running = 0;
+           
             }
         }
-    } else {
-        running = 0;
     }
-
     return 0;
 }
 
@@ -280,9 +347,9 @@ static long fij_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         if (copy_from_user(&params, (void __user *)arg, sizeof(params)))
             return -EFAULT;
 
-        target_pid = find_pid_by_name(params.process_name);
-        if (target_pid < 0) {
-            printk(KERN_ERR "fij: process '%s' not found\n", params.process_name);
+        target_tgid = find_pid_by_name(params.process_name);
+	if (target_tgid < 0) {
+	printk(KERN_ERR "fij: process '%s' not found\n", params.process_name);
             return -ESRCH;
         }
 
@@ -301,9 +368,9 @@ static long fij_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
             return PTR_ERR(bitflip_thread);
         }
 
-        printk(KERN_INFO "fij: started fault injection on '%s' (PID %d) for %d cycles\n",
-               params.process_name, target_pid, params.cycles);
-        break;
+       printk(KERN_INFO "fij: started fault injection on '%s' (TGID %d) for %d cycles\n",
+           params.process_name, target_tgid, params.cycles);
+       break;
 
     case IOCTL_STOP_FAULT:
         if (running && bitflip_thread) {
@@ -373,20 +440,20 @@ static long fij_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
             return ret;
         }
 
-        target_pid = find_pid_by_name(params.process_name);
-        if (target_pid < 0) {
-            printk(KERN_ERR "fij: launched '%s' not found\n", params.process_name);
+        target_tgid = find_pid_by_name(params.process_name);
+        if (target_tgid < 0) {
+	printk(KERN_ERR "fij: launched '%s' not found\n", params.process_name);
             kfree(path_copy);
             running = 0;
             return -ESRCH;
         }
-        printk(KERN_INFO "fij: launched '%s' (PID %d)\n",
-               params.process_name, target_pid);
+        printk(KERN_INFO "fij: launched '%s' (TGID %d)\n",
+               params.process_name, target_tgid);
 
         if (params.target_pc) {
-            struct pid *p_tmp = find_get_pid(target_pid);
-            struct task_struct *t = p_tmp ? pid_task(p_tmp, PIDTYPE_PID) : NULL;
-            struct mm_struct *m = t ? get_task_mm(t) : NULL;
+            struct pid *p_tmp = find_get_pid(target_tgid);
+            struct task_struct *t = p_tmp ? pid_task(p_tmp, PIDTYPE_TGID) : NULL;
+	    struct mm_struct *m = t ? get_task_mm(t) : NULL;
 
             if (!t || !m) {
                 if (m) mmput(m);
@@ -403,9 +470,9 @@ static long fij_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         }
 
         if (target_pc != 0) {
-            struct pid *p = find_get_pid(target_pid);
-            struct task_struct *t = p ? pid_task(p, PIDTYPE_PID) : NULL;
-            int err = 0;
+            struct pid *p = find_get_pid(target_tgid);
+            struct task_struct *t = p ? pid_task(p, PIDTYPE_TGID) : NULL;
+	    int err = 0;
 
             if (!t) {
                 if (p) put_pid(p);
@@ -442,14 +509,38 @@ static long fij_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         }
 
         {
-            struct pid *p = find_get_pid(target_pid);
+            struct pid *p = find_get_pid(target_tgid);
             if (p) {
-                send_sig(SIGCONT, pid_task(p, PIDTYPE_PID), 0);
+                /* SIGCONT is job-control and resumes the whole thread group even if sent to one thread */
+                send_sig(SIGCONT, pid_task(p, PIDTYPE_TGID), 0);
                 put_pid(p);
-                printk(KERN_INFO "fij: SIGCONT → PID %d\n", target_pid);
+                printk(KERN_INFO "fij: SIGCONT → TGID %d\n", target_tgid);
             }
         }
+	{
+	    struct task_struct *leader;
 
+	    rcu_read_lock();
+	    leader = pid_task(find_vpid(target_tgid), PIDTYPE_TGID);
+	    if (leader)
+		get_task_struct(leader);   /* keep it alive for monitoring */
+	    rcu_read_unlock();
+
+	    if (!leader) {
+		printk(KERN_ERR "fij: cannot get leader for TGID %d\n", target_tgid);
+		running = 0;
+		return -ESRCH;
+	    }
+
+	    pc_monitor_thread = kthread_run(monitor_thread_fn, leader, "fij_monitor");
+	    if (IS_ERR(pc_monitor_thread)) {
+		put_task_struct(leader);
+		printk(KERN_ERR "fij: failed to start monitor thread\n");
+		running = 0;
+		return PTR_ERR(pc_monitor_thread);
+	    }
+	}
+	
         if (target_pc == 0) {
             int ret2 = perform_bitflip();
             if (ret2)
@@ -459,12 +550,9 @@ static long fij_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
                 bitflip_thread = kthread_run(bitflip_thread_fn, NULL, "bitflip_thread");
                 if (IS_ERR(bitflip_thread)) {
                     printk(KERN_ERR "fij: failed to start bitflip thread\n");
-                    running = 0;
+                    
                 }
-            } else {
-                running = 0;
-            }
-        }
+            }        }
 
         kfree(path_copy);
         break;
@@ -523,6 +611,8 @@ static int __init fij_init(void)
 
 static void __exit fij_exit(void)
 {
+	flush_work(&uprobe_disarm_work);
+	
     if (bitflip_thread) {
         kthread_stop(bitflip_thread);
         bitflip_thread = NULL;
