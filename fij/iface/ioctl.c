@@ -54,6 +54,9 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         if (READ_ONCE(ctx->running))
             return -EBUSY;
 
+        ctx->target_reg = params.target_reg;
+        ctx->reg_bit    = params.reg_bit;
+
         // here the remaning cycles are always set to 1. the logic has to be changed from cycles to array of PCs
         ctx->remaining_cycles = 1;
         WRITE_ONCE(ctx->running, 1);

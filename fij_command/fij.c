@@ -10,13 +10,38 @@
 #define IOCTL_STATUS_FAULT _IOR('f', 3, int)
 #define IOCTL_EXEC_AND_FAULT _IOW('f', 4, struct fij_params)
 
+enum fij_reg_id {
+    FIJ_REG_NONE = 0,
+    FIJ_REG_RAX, FIJ_REG_RBX, FIJ_REG_RCX, FIJ_REG_RDX,
+    FIJ_REG_RSI, FIJ_REG_RDI, FIJ_REG_RBP, FIJ_REG_RSP,
+    FIJ_REG_RIP,        /* PC */
+    FIJ_REG_MAX
+};
+
 struct fij_params {
     char process_name[256];
-    char process_path[256];     // program path
-    char process_args[256];     // argument string
-    int cycles;                 // fault cycles
-    unsigned long target_pc;    // new: target instruction pointer (0 = immediate)
+    char process_path[256];
+    char process_args[256];
+    int  cycles;
+    unsigned long target_pc;     /* offset from start_code in INT */
+    int  target_reg;             /* enum fij_reg_id */
+    int  reg_bit;
 };
+
+/************** Helper to find target register ************** */
+static int reg_name_to_id(const char *name) {
+    if (!name) return FIJ_REG_NONE;
+    if (!strcasecmp(name,"rax")) return FIJ_REG_RAX;
+    if (!strcasecmp(name,"rbx")) return FIJ_REG_RBX;
+    if (!strcasecmp(name,"rcx")) return FIJ_REG_RCX;
+    if (!strcasecmp(name,"rdx")) return FIJ_REG_RDX;
+    if (!strcasecmp(name,"rsi")) return FIJ_REG_RSI;
+    if (!strcasecmp(name,"rdi")) return FIJ_REG_RDI;
+    if (!strcasecmp(name,"rbp")) return FIJ_REG_RBP;
+    if (!strcasecmp(name,"rsp")) return FIJ_REG_RSP;
+    if (!strcasecmp(name,"pc") || !strcasecmp(name,"rip")) return FIJ_REG_RIP;
+    return FIJ_REG_NONE;
+}
 
 /*****Helper to parse target_pc argument******/
 unsigned long parse_pc_arg(const char *arg) {
@@ -47,12 +72,13 @@ int main(int argc, char *argv[]) {
 
 	for (int i = 2; i < argc; ++i) {
 	    if (strncmp(argv[i], "process=", 8) == 0) {
-		strncpy(params.process_name, argv[i] + 8, sizeof(params.process_name) - 1);
+		    strncpy(params.process_name, argv[i] + 8, sizeof(params.process_name) - 1);
 	    } else if (strncmp(argv[i], "cycles=", 7) == 0) {
-		params.cycles = atoi(argv[i] + 7);
-	    } else {
-		fprintf(stderr, "Invalid argument: %s\n", argv[i]);
-		return 1;
+		    params.cycles = atoi(argv[i] + 7);
+	    } 
+        else {
+            fprintf(stderr, "Invalid argument: %s\n", argv[i]);
+            return 1;
 	    }
 	}
         if (ioctl(fd, IOCTL_START_FAULT, &params) < 0) {
@@ -94,7 +120,22 @@ int main(int argc, char *argv[]) {
 		params.cycles = atoi(argv[i] + 7);
 	    } else if (strncmp(argv[i], "pc=", 3) == 0) {
 		params.target_pc = parse_pc_arg(argv[i]);
-	    } else {
+	    } else if (strncmp(argv[i], "reg=", 4) == 0) {
+            const char *nm = argv[i] + 4;
+            params.target_reg = reg_name_to_id(nm);
+            if (params.target_reg == FIJ_REG_NONE) {
+                fprintf(stderr, "Invalid reg name: %s\n", nm);
+                return 1;
+            }
+        } else if (strncmp(argv[i], "bit=", 4) == 0) {
+            char *end = NULL;
+            long b = strtol(argv[i] + 4, &end, 0);
+            if (end == argv[i] + 4 || b < 0 || b > 63) {
+                fprintf(stderr, "Invalid bit index (0..63): %s\n", argv[i] + 4);
+                return 1;
+            }
+            params.reg_bit = (int)b;
+        } else {
 		fprintf(stderr, "Invalid argument: %s\n", argv[i]);
 		return 1;
 	    }
