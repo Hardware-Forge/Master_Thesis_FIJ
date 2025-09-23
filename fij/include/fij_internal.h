@@ -93,9 +93,12 @@ void fij_chardev_unregister(void);
 long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 
 /* ---- bitflip ---- */
+int fij_flip_register_from_ptregs(struct fij_ctx *ctx, struct pt_regs *regs);
 int  fij_perform_bitflip(struct fij_ctx *ctx);
 int  fij_start_bitflip_thread(struct fij_ctx *ctx);
 void fij_stop_bitflip_thread(struct fij_ctx *ctx);
+int fij_flip_for_task(struct fij_ctx *ctx, struct task_struct *t);
+int fij_stop_flip_resume_one_random(struct fij_ctx *ctx);
 
 /* ---- uprobes ---- */
 int  fij_uprobe_arm(struct fij_ctx *ctx, unsigned long target_va);
@@ -105,6 +108,7 @@ void fij_uprobe_disarm_sync(struct fij_ctx *ctx);
 /* ---- monitor ---- */
 int  fij_monitor_start(struct fij_ctx *ctx);
 void fij_monitor_stop(struct fij_ctx *ctx);
+int fij_wait_task_stopped(struct task_struct *t, long timeout_jiffies);
 
 /* ---- exec helper ---- */
 int  fij_exec_and_stop(const char *path, char *const argv[]);
@@ -114,5 +118,7 @@ pid_t fij_find_pid_by_name(const char *name);
 int   fij_va_to_file_off(struct task_struct *t, unsigned long va,
                          struct inode **out_inode, loff_t *out_off);
 int   fij_send_cont(pid_t tgid);
+struct task_struct *fij_pick_random_user_thread(int tgid);
+struct task_struct *fij_rcu_find_get_task_by_tgid(pid_t tgid);
 
 #endif /* _LINUX_FIJ_INTERNAL_H */

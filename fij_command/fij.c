@@ -71,22 +71,35 @@ int main(int argc, char *argv[]) {
 	params.cycles = 0;  // default: infinite
 
 	for (int i = 2; i < argc; ++i) {
-	    if (strncmp(argv[i], "process=", 8) == 0) {
-		    strncpy(params.process_name, argv[i] + 8, sizeof(params.process_name) - 1);
+	    if (strncmp(argv[i], "path=", 5) == 0) {
+		    strncpy(params.process_path, argv[i] + 5, sizeof(params.process_path) - 1);
+            // Auto-fill process_name
+            char *last_slash = strrchr(params.process_path, '/');
+            if (last_slash)
+                strncpy(params.process_name, last_slash + 1, sizeof(params.process_name) - 1);
+            else
+                strncpy(params.process_name, params.process_path, sizeof(params.process_name) - 1);
 	    } else if (strncmp(argv[i], "cycles=", 7) == 0) {
 		    params.cycles = atoi(argv[i] + 7);
-	    } 
+	    }
         else {
             fprintf(stderr, "Invalid argument: %s\n", argv[i]);
             return 1;
 	    }
 	}
+
+        if (params.process_path[0] == '\0') {
+            fprintf(stderr, "Missing path= argument\n");
+            return 1;
+        }
+
         if (ioctl(fd, IOCTL_START_FAULT, &params) < 0) {
             perror("ioctl start");
             return 1;
         }
 
         printf("Started fault injection for '%s' (%d cycles)\n", params.process_name, params.cycles);
+        
     } else if (argc == 2 && strcmp(argv[1], "stop") == 0) {
         if (ioctl(fd, IOCTL_STOP_FAULT) < 0) {
             perror("ioctl stop");

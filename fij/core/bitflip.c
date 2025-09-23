@@ -9,19 +9,48 @@
 static int bitflip_thread_fn(void *data)
 {
     struct fij_ctx *ctx = data;
+    int infinite = (READ_ONCE(ctx->remaining_cycles) < 0);
 
-    while (!kthread_should_stop() &&
-           (READ_ONCE(ctx->remaining_cycles) > 0 || READ_ONCE(ctx->remaining_cycles) == -1)) {
+    while (!kthread_should_stop()) {
+        int rem = READ_ONCE(ctx->remaining_cycles);
+        if (!infinite && rem <= 0)
+            break;
 
-        (void)fij_perform_bitflip(ctx);
+        if (fij_stop_flip_resume_one_random(ctx) == -ESRCH) {
+            pr_info("FIJ: target TGID %d gone; stopping\n", ctx->target_tgid);
+            break;
+        }
 
-        if (READ_ONCE(ctx->remaining_cycles) > 0)
-            WRITE_ONCE(ctx->remaining_cycles, ctx->remaining_cycles - 1);
+        if (!infinite)
+            WRITE_ONCE(ctx->remaining_cycles, rem - 1);
 
-        msleep(READ_ONCE(ctx->interval_ms));
+        /* Sleep until next tick, but be interruptible for unload/stop */
+        if (msleep_interruptible(ctx->interval_ms))
+            break;
     }
 
     WRITE_ONCE(ctx->running, 0);
+    return 0;
+}
+
+int fij_flip_register_from_ptregs(struct fij_ctx *ctx, struct pt_regs *regs)
+{
+    int bit = READ_ONCE(ctx->reg_bit);
+    unsigned long *p = fij_reg_ptr_from_ptregs(regs, ctx->target_reg);
+
+    if (!p || bit < 0 || bit > 63) {
+        pr_err("bad reg/bit (reg=%d bit=%d)\n", ctx->target_reg, bit);
+        return -EINVAL;
+    }
+
+    unsigned long before = READ_ONCE(*p);
+    unsigned long mask = (1UL << bit);
+    unsigned long after = before ^ mask;
+    WRITE_ONCE(*p, after);
+
+    pr_info("FIJ: flipped %s bit %d (LSB=0): 0x%lx -> 0x%lx (TGID %d)\n",
+            fij_reg_name(ctx->target_reg), bit, before, after, current->tgid);
+
     return 0;
 }
 
@@ -111,6 +140,60 @@ out_put_mm:
 out_put_task:
     if (task) put_task_struct(task);
     return ret;
+}
+
+int fij_stop_flip_resume_one_random(struct fij_ctx *ctx)
+{
+    struct task_struct *t;
+    int ret = 0;
+
+    t = fij_pick_random_user_thread(ctx->target_tgid);
+    if (!t)
+        return -ESRCH;
+
+    /* Group-stop the process via SIGSTOP (affects all threads) */
+    {
+        struct task_struct *g;
+        rcu_read_lock();
+        g = fij_rcu_find_get_task_by_tgid(ctx->target_tgid);
+        if (g) get_task_struct(g);
+        rcu_read_unlock();
+
+        if (!g) { put_task_struct(t); return -ESRCH; }
+        /* Send SIGSTOP to group leader to ensure a group stop */
+        send_sig(SIGSTOP, g, 1);
+        put_task_struct(g);
+    }
+
+    /* Wait for the chosen thread to be stopped */
+    ret = fij_wait_task_stopped(t, msecs_to_jiffies(500));
+    if (!ret) {
+        /* Flip only this thread's saved user regs */
+        ret = fij_flip_for_task(ctx, t);
+    }
+
+    /* Resume the whole group */
+    {
+        struct task_struct *g;
+        rcu_read_lock();
+        g = fij_rcu_find_get_task_by_tgid(ctx->target_tgid);
+        if (g) {
+            /* SIGCONT wakes the group */
+            send_sig(SIGCONT, g, 1);
+        }
+        rcu_read_unlock();
+    }
+
+    put_task_struct(t);
+    return ret;
+}
+
+int fij_flip_for_task(struct fij_ctx *ctx, struct task_struct *t)
+{
+    struct pt_regs *regs = task_pt_regs(t);  /* valid while task is stopped in kernel */
+    if (!regs)
+        return -EINVAL;
+    return fij_flip_register_from_ptregs(ctx, regs);
 }
 
 int fij_start_bitflip_thread(struct fij_ctx *ctx)

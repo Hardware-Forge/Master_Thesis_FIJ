@@ -9,16 +9,47 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
     switch (cmd) {
     case IOCTL_START_FAULT: {
-        int err;
+        char **argv = NULL;
+        char *path_copy = NULL, *args_copy = NULL, *cursor = NULL;
+        int argc = 0, err = 0;
 
         if (copy_from_user(&params, (void __user *)arg, sizeof(params)))
             return -EFAULT;
 
+        /* Start process */
+        argv = kcalloc(FIJ_MAX_ARGC + 2, sizeof(char *), GFP_KERNEL);
+        if (!argv) { err = -ENOMEM; goto fail_start; }
+
+        path_copy = kstrdup(params.process_path, GFP_KERNEL);
+        if (!path_copy) { err = -ENOMEM; goto fail_start; }
+        argv[argc++] = path_copy;
+
+        if (params.process_args[0]) {
+            args_copy = kstrdup(params.process_args, GFP_KERNEL);
+            if (!args_copy) { err = -ENOMEM; goto fail_start; }
+
+            cursor = args_copy;
+            while (argc < FIJ_MAX_ARGC + 1) {
+                char *tok = strsep(&cursor, " ");
+                if (!tok) break;
+                if (*tok) argv[argc++] = tok;
+            }
+        }
+        argv[argc] = NULL;
+
+        err = fij_exec_and_stop(path_copy, argv);
+        if (err)
+            goto fail_start;
+
         ctx->target_tgid = fij_find_pid_by_name(params.process_name);
         if (ctx->target_tgid < 0) {
-            pr_err("process '%s' not found\n", params.process_name);
-            return -ESRCH;
+            pr_err("launched '%s' not found\n", params.process_name);
+            err = -ESRCH;
+            goto fail_start;
         }
+        pr_info("launched '%s' (TGID %d)\n", params.process_name, ctx->target_tgid);
+        /* End of start process */
+        
         if (READ_ONCE(ctx->running))
             return -EBUSY;
 
@@ -93,7 +124,7 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         }
         pr_info("launched '%s' (TGID %d)\n", params.process_name, ctx->target_tgid);
 
-        /* Compute absolute VA if requested */
+        /* Compute absolute VA */
         if (params.target_pc) {
             struct pid *p_tmp = find_get_pid(ctx->target_tgid);
             struct task_struct *t = p_tmp ? pid_task(p_tmp, PIDTYPE_TGID) : NULL;
@@ -109,7 +140,10 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
             mmput(m);
             put_pid(p_tmp);
         } else {
-            ctx->target_pc = 0;
+            struct pid *p_tmp = find_get_pid(ctx->target_tgid);
+            struct task_struct *t = p_tmp ? pid_task(p_tmp, PIDTYPE_TGID) : NULL;
+            struct mm_struct *m = t ? get_task_mm(t) : NULL;
+            ctx->target_pc = m->start_code;
         }
 
         /* Arm uprobe if target_pc != 0 */
@@ -128,16 +162,6 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         err = fij_monitor_start(ctx);
         if (err)
             goto fail_start;
-
-        /* If target_pc == 0, do immediate bitflip and possibly periodic thread */
-        if (ctx->target_pc == 0) {
-            int ret2 = fij_perform_bitflip(ctx);
-            if (ret2)
-                pr_err("immediate bitflip failed (%d)\n", ret2);
-
-            if (READ_ONCE(ctx->remaining_cycles) != 1)
-                (void)fij_start_bitflip_thread(ctx);
-        }
 
         /* Success path: free argv holders (argv elements point into path_copy / args_copy) */
         kfree(argv);

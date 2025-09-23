@@ -126,3 +126,22 @@ void fij_monitor_stop(struct fij_ctx *ctx)
         pr_info("fij: monitor_stop: no thread\n");
     }
 }
+
+/* wait until 't' is actually stopped by SIGSTOP */
+int fij_wait_task_stopped(struct task_struct *t, long timeout_jiffies)
+{
+    /* We rely on TASK_STOPPED | __TASK_TRACED states */
+    while (timeout_jiffies > 0) {
+        unsigned long state = READ_ONCE(t->__state);
+        if (state & (TASK_STOPPED | __TASK_TRACED))
+            return 0;
+
+        if (fatal_signal_pending(current))
+            return -EINTR;
+
+        /* Sleep in small chunks to observe state changes */
+        set_current_state(TASK_UNINTERRUPTIBLE);
+        timeout_jiffies -= schedule_timeout(msecs_to_jiffies(10));
+    }
+    return -ETIMEDOUT;
+}
