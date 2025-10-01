@@ -14,6 +14,9 @@
 
 #include <uapi/linux/fij.h>
 
+#include "fij_regs.h"
+
+
 /* Forward decl */
 struct task_struct;
 
@@ -49,22 +52,6 @@ struct fij_ctx {
     int  reg_bit;
 };
 
-static inline unsigned long *fij_reg_ptr_from_ptregs(struct pt_regs *regs, int id)
-{
-    switch (id) {
-    case FIJ_REG_RAX: return &regs->ax;
-    case FIJ_REG_RBX: return &regs->bx;
-    case FIJ_REG_RCX: return &regs->cx;
-    case FIJ_REG_RDX: return &regs->dx;
-    case FIJ_REG_RSI: return &regs->si;
-    case FIJ_REG_RDI: return &regs->di;
-    case FIJ_REG_RBP: return &regs->bp;
-    case FIJ_REG_RSP: return &regs->sp;
-    case FIJ_REG_RIP: return &regs->ip;
-    default: return NULL;
-    }
-}
-
 static const char *fij_reg_name(int id)
 {
     switch (id) {
@@ -76,6 +63,14 @@ static const char *fij_reg_name(int id)
     default: return "NONE";
     }
 }
+
+/* TEMPORARY */
+static inline unsigned long *
+fij_reg_ptr_from_ptregs(struct pt_regs *regs, int id)
+{
+    return fij_reg_ptr_from_ptregs_legacy(regs, id);
+}
+
 
 /* ---- char device ---- */
 int  fij_chardev_register(struct fij_ctx *ctx);
