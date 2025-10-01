@@ -37,11 +37,10 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         }
         argv[argc] = NULL;
 
-        err = fij_exec_and_stop(path_copy, argv);
+        err = fij_exec_and_stop(path_copy, argv, &ctx->target_tgid);
         if (err)
             goto fail_start;
 
-        ctx->target_tgid = fij_find_pid_by_name(params.process_name);
         if (ctx->target_tgid < 0) {
             pr_err("launched '%s' not found\n", params.process_name);
             err = -ESRCH;
@@ -112,11 +111,10 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         }
         argv[argc] = NULL;
 
-        err = fij_exec_and_stop(path_copy, argv);
+        err = fij_exec_and_stop(path_copy, argv, &ctx->target_tgid);
         if (err)
             goto fail_start;
 
-        ctx->target_tgid = fij_find_pid_by_name(params.process_name);
         if (ctx->target_tgid < 0) {
             pr_err("launched '%s' not found\n", params.process_name);
             err = -ESRCH;

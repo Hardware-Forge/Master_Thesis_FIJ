@@ -98,6 +98,7 @@ struct task_struct *fij_pick_random_user_thread(int tgid)
             if (idx++ == pick) {
                 get_task_struct(t);
                 chosen = t;
+                pr_info("thread %d chosen\n", pick);
                 break;
             }
         }

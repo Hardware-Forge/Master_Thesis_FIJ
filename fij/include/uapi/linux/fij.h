@@ -7,12 +7,21 @@
 #define FIJ_DEVICE_NAME "fij"
 #define FIJ_MAX_ARGC    4
 
+enum fij_reg_id {
+    FIJ_REG_NONE = 0,
+    FIJ_REG_RAX, FIJ_REG_RBX, FIJ_REG_RCX, FIJ_REG_RDX,
+    FIJ_REG_RSI, FIJ_REG_RDI, FIJ_REG_RBP, FIJ_REG_RSP,
+    FIJ_REG_RIP,        /* PC */
+    FIJ_REG_MAX
+};
+
+
 struct fij_params {
     char process_name[256];
     char process_path[256];
     char process_args[256];
     int  cycles;
-    unsigned long target_pc;     /* offset from start_code in INT */
+    int target_pc;     /* offset from start_code in INT */
     int  target_reg;             /* enum fij_reg_id */
     int  reg_bit;
 };

@@ -17,14 +17,6 @@
 /* Forward decl */
 struct task_struct;
 
-enum fij_reg_id {
-    FIJ_REG_NONE = 0,
-    FIJ_REG_RAX, FIJ_REG_RBX, FIJ_REG_RCX, FIJ_REG_RDX,
-    FIJ_REG_RSI, FIJ_REG_RDI, FIJ_REG_RBP, FIJ_REG_RSP,
-    FIJ_REG_RIP,        /* PC */
-    FIJ_REG_MAX
-};
-
 struct fij_ctx {
     /* targeting */
     pid_t              target_tgid;
@@ -111,7 +103,7 @@ void fij_monitor_stop(struct fij_ctx *ctx);
 int fij_wait_task_stopped(struct task_struct *t, long timeout_jiffies);
 
 /* ---- exec helper ---- */
-int  fij_exec_and_stop(const char *path, char *const argv[]);
+int  fij_exec_and_stop(const char *path, char *const argv[], pid_t *target_tgid);
 
 /* ---- utilities ---- */
 pid_t fij_find_pid_by_name(const char *name);

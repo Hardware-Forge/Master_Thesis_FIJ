@@ -1,4 +1,3 @@
-// fij_monitor.c
 #include "fij_internal.h"
 
 #include <linux/kthread.h>
@@ -87,7 +86,7 @@ int fij_monitor_start(struct fij_ctx *ctx)
     rcu_read_lock();
     leader = pid_task(find_vpid(READ_ONCE(ctx->target_tgid)), PIDTYPE_TGID);
     if (leader)
-        get_task_struct(leader); /* keep it alive for monitoring */
+        get_task_struct(leader);
     rcu_read_unlock();
 
     if (!leader)

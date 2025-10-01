@@ -5,12 +5,16 @@
 
 static int helper_child_init(struct subprocess_info *info, struct cred *new)
 {
+    /* tgid is setup */
+     pid_t *out = info->data;
+    if (out)
+        *out = task_tgid_vnr(current);
     /* Executes in the child process context before exec */
     send_sig(SIGSTOP, current, 0);  /* Stop self */
     return 0;
 }
 
-int fij_exec_and_stop(const char *path, char *const argv[])
+int fij_exec_and_stop(const char *path, char *const argv[], pid_t *target_tgid)
 {
     static char *envp[] = {
         "HOME=/",
@@ -21,7 +25,7 @@ int fij_exec_and_stop(const char *path, char *const argv[])
     int ret;
 
     sub_info = call_usermodehelper_setup(path, (char **)argv, envp, GFP_KERNEL,
-                                         helper_child_init, NULL, NULL);
+                                         helper_child_init, NULL, target_tgid);
     if (!sub_info)
         return -ENOMEM;
 

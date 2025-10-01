@@ -38,8 +38,12 @@ int fij_flip_register_from_ptregs(struct fij_ctx *ctx, struct pt_regs *regs)
     int bit = READ_ONCE(ctx->reg_bit);
     unsigned long *p = fij_reg_ptr_from_ptregs(regs, ctx->target_reg);
 
-    if (!p || bit < 0 || bit > 63) {
-        pr_err("bad reg/bit (reg=%d bit=%d)\n", ctx->target_reg, bit);
+    if (!p) {
+        pr_err("bad reg (reg=%d)\n", ctx->target_reg);
+        return -EINVAL;
+    }
+    if (bit < 0 || bit > 63) {
+        pr_err("bad bit (bit=%d)\n", bit);
         return -EINVAL;
     }
 

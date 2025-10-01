@@ -4,29 +4,12 @@
 #include <sys/ioctl.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <linux/fij.h>
 
 #define IOCTL_START_FAULT _IOW('f', 1, struct fij_params)
 #define IOCTL_STOP_FAULT  _IO('f', 2)
 #define IOCTL_STATUS_FAULT _IOR('f', 3, int)
 #define IOCTL_EXEC_AND_FAULT _IOW('f', 4, struct fij_params)
-
-enum fij_reg_id {
-    FIJ_REG_NONE = 0,
-    FIJ_REG_RAX, FIJ_REG_RBX, FIJ_REG_RCX, FIJ_REG_RDX,
-    FIJ_REG_RSI, FIJ_REG_RDI, FIJ_REG_RBP, FIJ_REG_RSP,
-    FIJ_REG_RIP,        /* PC */
-    FIJ_REG_MAX
-};
-
-struct fij_params {
-    char process_name[256];
-    char process_path[256];
-    char process_args[256];
-    int  cycles;
-    unsigned long target_pc;     /* offset from start_code in INT */
-    int  target_reg;             /* enum fij_reg_id */
-    int  reg_bit;
-};
 
 /************** Helper to find target register ************** */
 static int reg_name_to_id(const char *name) {
@@ -43,14 +26,38 @@ static int reg_name_to_id(const char *name) {
     return FIJ_REG_NONE;
 }
 
-/*****Helper to parse target_pc argument******/
-unsigned long parse_pc_arg(const char *arg) {
-    if (strncmp(arg, "pc=", 3) != 0)
-        return 0;
-    const char *val = arg + 3;
-    char *end;
-    unsigned long pc = strtoul(val, &end, 0); // auto-detect 0x prefix
-    return pc;
+static void set_process_name_from_path(struct fij_params *p) {
+    if (!p || p->process_path[0] == '\0') return;
+    const char *last_slash = strrchr(p->process_path, '/');
+    const char *base = last_slash ? (last_slash + 1) : p->process_path;
+    // Ensure NUL termination
+    strncpy(p->process_name, base, sizeof(p->process_name) - 1);
+    p->process_name[sizeof(p->process_name) - 1] = '\0';
+}
+
+static int parse_common_params(int argc, char **argv, int start_idx, struct fij_params *p) {
+    if (!p) return -1;
+
+    for (int i = start_idx; i < argc; ++i) {
+        if (strncmp(argv[i], "path=", 5) == 0) {
+            strncpy(p->process_path, argv[i] + 5, sizeof(p->process_path) - 1);
+            p->process_path[sizeof(p->process_path) - 1] = '\0';
+            set_process_name_from_path(p);
+        } else if (strncmp(argv[i], "args=", 5) == 0) {
+            strncpy(p->process_args, argv[i] + 5, sizeof(p->process_args) - 1);
+            p->process_args[sizeof(p->process_args) - 1] = '\0';
+        } else {
+            // Not a common parameter; caller will handle (e.g., cycles=, pc=, reg=, bit=)
+        }
+    }
+
+    // Validate required common fields if the caller expects them
+    // (Exec requires path; Start also expects path in your current design)
+    if (p->process_path[0] == '\0') {
+        fprintf(stderr, "Missing path= argument\n");
+        return -1;
+    }
+    return 0;
 }
 
 
@@ -70,28 +77,17 @@ int main(int argc, char *argv[]) {
 	struct fij_params params = {0};
 	params.cycles = 0;  // default: infinite
 
-	for (int i = 2; i < argc; ++i) {
-	    if (strncmp(argv[i], "path=", 5) == 0) {
-		    strncpy(params.process_path, argv[i] + 5, sizeof(params.process_path) - 1);
-            // Auto-fill process_name
-            char *last_slash = strrchr(params.process_path, '/');
-            if (last_slash)
-                strncpy(params.process_name, last_slash + 1, sizeof(params.process_name) - 1);
-            else
-                strncpy(params.process_name, params.process_path, sizeof(params.process_name) - 1);
-	    } else if (strncmp(argv[i], "cycles=", 7) == 0) {
-		    params.cycles = atoi(argv[i] + 7);
-	    }
-        else {
-            fprintf(stderr, "Invalid argument: %s\n", argv[i]);
-            return 1;
-	    }
-	}
+    // parse common fields (path, args)
+    if (parse_common_params(argc, argv, 2, &params) < 0) {
+        return 1;
+    }
 
-        if (params.process_path[0] == '\0') {
-            fprintf(stderr, "Missing path= argument\n");
-            return 1;
+	// parse start-specific fields
+    for (int i = 2; i < argc; ++i) {
+        if (strncmp(argv[i], "cycles=", 7) == 0) {
+            params.cycles = atoi(argv[i] + 7);
         }
+    }
 
         if (ioctl(fd, IOCTL_START_FAULT, &params) < 0) {
             perror("ioctl start");
@@ -118,22 +114,15 @@ int main(int argc, char *argv[]) {
 	params.cycles = 0;  // default to infinite
 	params.target_pc = 0;
 
+    // parse common fields (path, args)
+    if (parse_common_params(argc, argv, 2, &params) < 0) return 1;
+
 	for (int i = 2; i < argc; ++i) {
-	    if (strncmp(argv[i], "path=", 5) == 0) {
-		strncpy(params.process_path, argv[i] + 5, sizeof(params.process_path) - 1);
-		// Auto-fill process_name
-		char *last_slash = strrchr(params.process_path, '/');
-		if (last_slash)
-		    strncpy(params.process_name, last_slash + 1, sizeof(params.process_name) - 1);
-		else
-		    strncpy(params.process_name, params.process_path, sizeof(params.process_name) - 1);
-	    } else if (strncmp(argv[i], "args=", 5) == 0) {
-		strncpy(params.process_args, argv[i] + 5, sizeof(params.process_args) - 1);
-	    } else if (strncmp(argv[i], "cycles=", 7) == 0) {
-		params.cycles = atoi(argv[i] + 7);
-	    } else if (strncmp(argv[i], "pc=", 3) == 0) {
-		params.target_pc = parse_pc_arg(argv[i]);
-	    } else if (strncmp(argv[i], "reg=", 4) == 0) {
+        if (strncmp(argv[i], "cycles=", 7) == 0) {
+            params.cycles = atoi(argv[i] + 7);
+        } else if (strncmp(argv[i], "pc=", 3) == 0) {
+            params.target_pc = (unsigned long)strtoull(argv[i] + 3, NULL, 0);
+        } else if (strncmp(argv[i], "reg=", 4) == 0) {
             const char *nm = argv[i] + 4;
             params.target_reg = reg_name_to_id(nm);
             if (params.target_reg == FIJ_REG_NONE) {
@@ -148,15 +137,8 @@ int main(int argc, char *argv[]) {
                 return 1;
             }
             params.reg_bit = (int)b;
-        } else {
-		fprintf(stderr, "Invalid argument: %s\n", argv[i]);
-		return 1;
-	    }
-	}
-        if (params.process_path[0] == '\0') {
-            fprintf(stderr, "Missing path= argument\n");
-            return 1;
         }
+    }
 
         if (ioctl(fd, IOCTL_EXEC_AND_FAULT, &params) < 0) {
             perror("ioctl exec");
