@@ -5,11 +5,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <linux/fij.h>
-
-#define IOCTL_START_FAULT _IOW('f', 1, struct fij_params)
-#define IOCTL_STOP_FAULT  _IO('f', 2)
-#define IOCTL_STATUS_FAULT _IOR('f', 3, int)
-#define IOCTL_EXEC_AND_FAULT _IOW('f', 4, struct fij_params)
+#include <limits.h>
 
 /************** Helper to find target register ************** */
 static int reg_name_to_id(const char *name) {
@@ -46,8 +42,8 @@ static int parse_common_params(int argc, char **argv, int start_idx, struct fij_
         } else if (strncmp(argv[i], "args=", 5) == 0) {
             strncpy(p->process_args, argv[i] + 5, sizeof(p->process_args) - 1);
             p->process_args[sizeof(p->process_args) - 1] = '\0';
-        } else {
-            // Not a common parameter; caller will handle (e.g., cycles=, pc=, reg=, bit=)
+        } else if (strncmp(argv[i], "mem_weight=", 11) == 0) {
+            p->weight_mem = atoi(argv[i] + 11);
         }
     }
 
@@ -55,6 +51,11 @@ static int parse_common_params(int argc, char **argv, int start_idx, struct fij_
     // (Exec requires path; Start also expects path in your current design)
     if (p->process_path[0] == '\0') {
         fprintf(stderr, "Missing path= argument\n");
+        return -1;
+    }
+
+    if (p->weight_mem < 0 || p->weight_mem > INT_MAX) {
+        fprintf(stderr, "weight has to be > 0 and < MAX_INT");
         return -1;
     }
     return 0;
@@ -69,7 +70,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (argc >= 2 && strcmp(argv[1], "start") == 0) {
-	if (argc < 3 || argc > 4) {
+	if (argc < 3) {
     		fprintf(stderr, "Usage: %s start process=NAME [cycles=N]\n", argv[0]);
     		return 1;
 	}
@@ -104,7 +105,7 @@ int main(int argc, char *argv[]) {
         printf("Fault injection stopped\n");
     } else if (argc == 2 && strcmp(argv[1], "status") == 0) {
         int status;
-        if (ioctl(fd, IOCTL_STATUS_FAULT, &status) < 0) {
+        if (ioctl(fd, IOCTL_GET_STATUS, &status) < 0) {
             perror("ioctl status");
             return 1;
         }

@@ -48,7 +48,7 @@ static int uprobe_hit(struct uprobe_consumer *uc, struct pt_regs *regs, u64 *bp_
         (void)fij_flip_register_from_ptregs(ctx, regs);
     } else {
         /* flip memory via existing function */
-        (void)fij_perform_bitflip(ctx);
+        (void)fij_perform_mem_bitflip(ctx);
     }
     fij_uprobe_post_actions(ctx);
     return 0;

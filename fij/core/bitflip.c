@@ -11,6 +11,8 @@ static int bitflip_thread_fn(void *data)
     struct fij_ctx *ctx = data;
     int infinite = (READ_ONCE(ctx->remaining_cycles) < 0);
 
+    init_completion(&ctx->bitflip_done);
+
     while (!kthread_should_stop()) {
         int rem = READ_ONCE(ctx->remaining_cycles);
         if (!infinite && rem <= 0)
@@ -29,13 +31,19 @@ static int bitflip_thread_fn(void *data)
             break;
     }
 
+    complete(&ctx->bitflip_done);
+    ctx->bitflip_thread = NULL;
     WRITE_ONCE(ctx->running, 0);
     return 0;
 }
 
 int fij_flip_register_from_ptregs(struct fij_ctx *ctx, struct pt_regs *regs)
 {
-    int bit = READ_ONCE(ctx->reg_bit);
+    /* if reg is null pick random value */
+    if (!ctx->target_reg)
+    ctx->target_reg = fij_pick_random_reg_any();
+    /* if bit is null pick a random value */
+    int bit = (ctx->reg_bit >= 0) ? ctx->reg_bit : fij_pick_random_bit64();
     unsigned long *p = fij_reg_ptr_from_ptregs(regs, ctx->target_reg);
 
     if (!p) {
@@ -58,7 +66,7 @@ int fij_flip_register_from_ptregs(struct fij_ctx *ctx, struct pt_regs *regs)
     return 0;
 }
 
-int fij_perform_bitflip(struct fij_ctx *ctx)
+int fij_perform_mem_bitflip(struct fij_ctx *ctx)
 {
     struct task_struct *task = NULL;
     struct mm_struct *mm = NULL;
@@ -194,10 +202,17 @@ int fij_stop_flip_resume_one_random(struct fij_ctx *ctx)
 
 int fij_flip_for_task(struct fij_ctx *ctx, struct task_struct *t)
 {
-    struct pt_regs *regs = task_pt_regs(t);  /* valid while task is stopped in kernel */
-    if (!regs)
-        return -EINVAL;
-    return fij_flip_register_from_ptregs(ctx, regs);
+    struct pt_regs *regs = task_pt_regs(t);
+
+    if (choose_register_target(ctx->weight_mem)) {
+        if (!regs)
+            return -EINVAL;
+        return fij_flip_register_from_ptregs(ctx, regs);
+    }
+    else {
+        return fij_perform_mem_bitflip(ctx);
+    }
+    
 }
 
 int fij_start_bitflip_thread(struct fij_ctx *ctx)

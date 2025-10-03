@@ -53,6 +53,7 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
             return -EBUSY;
 
         ctx->remaining_cycles = (params.cycles == 0) ? -1 : params.cycles;
+        ctx->weight_mem = params.weight_mem;
         err = fij_start_bitflip_thread(ctx);
         if (err)
             return err;

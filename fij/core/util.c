@@ -107,3 +107,40 @@ struct task_struct *fij_pick_random_user_thread(int tgid)
     put_task_struct(g);
     return chosen; /* ref held if non-NULL */
 }
+
+/* Pick a random register id in [FIJ_REG_RAX .. FIJ_REG_MAX-1] */
+enum fij_reg_id fij_pick_random_reg_any(void)
+{
+    int range = (FIJ_REG_MAX - 1);   /* number of selectable regs */
+    return (enum fij_reg_id)(1 + (get_random_u32() % range));
+}
+
+/* Pick a random bit for a 64-bit register */
+int fij_pick_random_bit64(void)
+{
+    return get_random_u32() & 63;    /* 0..63 */
+}
+
+bool choose_register_target(int weight_mem)
+{
+    const u32 weight_regs = 1;
+
+    /* sanitize signed input: negatives behave like 0 */
+    u32 wm = (u32)weight_mem;
+
+    /* total = 1 + wm, avoiding wrap to 0 if wm == U32_MAX */
+    u32 total = (wm == U32_MAX) ? U32_MAX : (wm + weight_regs);
+
+    if (total == 1)
+        return true;  // only regs
+
+    /* Unbiased draw in [0, total) via rejection sampling on u32 */
+    {
+        u32 r;
+        u32 limit = U32_MAX - (U32_MAX % total);
+        do {
+            r = get_random_u32();
+        } while (r >= limit);
+        return (r % total) < weight_regs;   // i.e., r % total == 0
+    }
+}

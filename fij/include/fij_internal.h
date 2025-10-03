@@ -45,11 +45,15 @@ struct fij_ctx {
 
     /* device */
     struct miscdevice   miscdev;
-
+    
+    /* threads completion */
     struct completion monitor_done;
+    struct completion bitflip_done;
 
+    /* user params */
     int  target_reg;             /* enum fij_reg_id */
     int  reg_bit;
+    int weight_mem;
 };
 
 static const char *fij_reg_name(int id)
@@ -81,7 +85,7 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 
 /* ---- bitflip ---- */
 int fij_flip_register_from_ptregs(struct fij_ctx *ctx, struct pt_regs *regs);
-int  fij_perform_bitflip(struct fij_ctx *ctx);
+int  fij_perform_mem_bitflip(struct fij_ctx *ctx);
 int  fij_start_bitflip_thread(struct fij_ctx *ctx);
 void fij_stop_bitflip_thread(struct fij_ctx *ctx);
 int fij_flip_for_task(struct fij_ctx *ctx, struct task_struct *t);
@@ -107,5 +111,8 @@ int   fij_va_to_file_off(struct task_struct *t, unsigned long va,
 int   fij_send_cont(pid_t tgid);
 struct task_struct *fij_pick_random_user_thread(int tgid);
 struct task_struct *fij_rcu_find_get_task_by_tgid(pid_t tgid);
+int fij_pick_random_bit64(void);
+enum fij_reg_id fij_pick_random_reg_any(void);
+bool choose_register_target(int weight_mem);
 
 #endif /* _LINUX_FIJ_INTERNAL_H */

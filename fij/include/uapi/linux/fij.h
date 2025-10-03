@@ -24,6 +24,7 @@ struct fij_params {
     int target_pc;     /* offset from start_code in INT */
     int  target_reg;             /* enum fij_reg_id */
     int  reg_bit;
+    int weight_mem;
 };
 
 /* IOCTLs */
