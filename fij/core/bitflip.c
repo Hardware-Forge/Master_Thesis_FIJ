@@ -10,11 +10,13 @@ static int bitflip_thread_fn(void *data)
 {
     struct fij_ctx *ctx = data;
     int infinite = (READ_ONCE(ctx->remaining_cycles) < 0);
+    
+    ctx->interval_ms = 300;
 
     init_completion(&ctx->bitflip_done);
 
     while (!kthread_should_stop()) {
-        
+
         if (!READ_ONCE(ctx->target_alive))
             break;
 
@@ -43,15 +45,16 @@ static int bitflip_thread_fn(void *data)
 
 int fij_flip_register_from_ptregs(struct fij_ctx *ctx, struct pt_regs *regs)
 {
+    int target_reg = ctx->parameters.target_reg;
     /* if reg is null pick random value */
-    if (!ctx->target_reg)
-    ctx->target_reg = fij_pick_random_reg_any();
+    if (!ctx->parameters.target_reg)
+    target_reg = fij_pick_random_reg_any();
     /* if bit is null pick a random value */
-    int bit = (ctx->reg_bit >= 0) ? ctx->reg_bit : fij_pick_random_bit64();
-    unsigned long *p = fij_reg_ptr_from_ptregs(regs, ctx->target_reg);
+    int bit = (ctx->parameters.reg_bit >= 0) ? ctx->parameters.reg_bit : fij_pick_random_bit64();
+    unsigned long *p = fij_reg_ptr_from_ptregs(regs, target_reg);
 
     if (!p) {
-        pr_err("bad reg (reg=%d)\n", ctx->target_reg);
+        pr_err("bad reg (reg=%d)\n", target_reg);
         return -EINVAL;
     }
     if (bit < 0 || bit > 63) {
@@ -65,7 +68,7 @@ int fij_flip_register_from_ptregs(struct fij_ctx *ctx, struct pt_regs *regs)
     WRITE_ONCE(*p, after);
 
     pr_info("FIJ: flipped %s bit %d (LSB=0): 0x%lx -> 0x%lx (TGID %d)\n",
-            fij_reg_name(ctx->target_reg), bit, before, after, current->tgid);
+            fij_reg_name(target_reg), bit, before, after, current->tgid);
 
     return 0;
 }
@@ -208,7 +211,7 @@ int fij_flip_for_task(struct fij_ctx *ctx, struct task_struct *t)
 {
     struct pt_regs *regs = task_pt_regs(t);
 
-    if (choose_register_target(ctx->weight_mem)) {
+    if (choose_register_target(ctx->parameters.weight_mem)) {
         if (!regs)
             return -EINVAL;
         return fij_flip_register_from_ptregs(ctx, regs);

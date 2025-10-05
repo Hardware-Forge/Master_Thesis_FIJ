@@ -37,7 +37,6 @@ int fij_build_argv_from_params(const struct fij_params *params, char ***argv_out
 long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
     struct fij_ctx *ctx = file->private_data;
-    struct fij_params params;
 
     switch (cmd) {
     case IOCTL_START_FAULT: {
@@ -45,29 +44,28 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
     char *path_copy = NULL, *args_copy = NULL;
     int err = 0;
 
-    if (copy_from_user(&params, (void __user *)arg, sizeof(params)))
+    if (copy_from_user(&ctx->parameters, (void __user *)arg, sizeof(ctx->parameters)))
         return -EFAULT;
 
     if (READ_ONCE(ctx->running))
         return -EBUSY;
 
-    err = fij_build_argv_from_params(&params, &argv, &path_copy, &args_copy);
+    err = fij_build_argv_from_params(&ctx->parameters, &argv, &path_copy, &args_copy);
     if (err) goto fail_start;
 
     err = fij_exec_and_stop(path_copy, argv, &ctx->target_tgid);
     if (err) goto fail_start;
 
     if (ctx->target_tgid < 0) {
-        pr_err("launched '%s' not found\n", params.process_name);
+        pr_err("launched '%s' not found\n", ctx->parameters.process_name);
         err = -ESRCH; goto fail_start;
     }
-    pr_info("launched '%s' (TGID %d)\n", params.process_name, ctx->target_tgid);
+    pr_info("launched '%s' (TGID %d)\n", ctx->parameters.process_name, ctx->target_tgid);
 
     WRITE_ONCE(ctx->running, 1);
     WRITE_ONCE(ctx->target_alive, true);
 
-    ctx->remaining_cycles = (params.cycles == 0) ? -1 : params.cycles;
-    ctx->weight_mem = params.weight_mem;
+    ctx->remaining_cycles = (ctx->parameters.cycles == 0) ? -1 : ctx->parameters.cycles;
 
     err = fij_monitor_start(ctx);
     if (err) { pr_err("monitor start failed: %d\n", err); goto fail_start; }
@@ -76,7 +74,7 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
     if (err) goto fail_start;
 
     pr_info("started fault injection on '%s' (TGID %d) for %d cycles\n",
-            params.process_name, ctx->target_tgid, params.cycles);
+            ctx->parameters.process_name, ctx->target_tgid, ctx->parameters.cycles);
 
     kfree(argv);
     kfree(args_copy);
@@ -88,14 +86,11 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         char *path_copy = NULL, *args_copy = NULL, *cursor = NULL;
         int argc = 0, err = 0;
 
-        if (copy_from_user(&params, (void __user *)arg, sizeof(params)))
+        if (copy_from_user(&ctx->parameters, (void __user *)arg, sizeof(ctx->parameters)))
             return -EFAULT;
 
         if (READ_ONCE(ctx->running))
             return -EBUSY;
-
-        ctx->target_reg = params.target_reg;
-        ctx->reg_bit    = params.reg_bit;
 
         // here the remaning cycles are always set to 1. the logic has to be changed from cycles to array of PCs
         ctx->remaining_cycles = 1;
@@ -104,12 +99,12 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         argv = kcalloc(FIJ_MAX_ARGC + 2, sizeof(char *), GFP_KERNEL);
         if (!argv) { err = -ENOMEM; goto fail_start; }
 
-        path_copy = kstrdup(params.process_path, GFP_KERNEL);
+        path_copy = kstrdup(ctx->parameters.process_path, GFP_KERNEL);
         if (!path_copy) { err = -ENOMEM; goto fail_start; }
         argv[argc++] = path_copy;
 
-        if (params.process_args[0]) {
-            args_copy = kstrdup(params.process_args, GFP_KERNEL);
+        if (ctx->parameters.process_args[0]) {
+            args_copy = kstrdup(ctx->parameters.process_args, GFP_KERNEL);
             if (!args_copy) { err = -ENOMEM; goto fail_start; }
 
             cursor = args_copy;
@@ -126,17 +121,17 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
             goto fail_start;
 
         if (ctx->target_tgid < 0) {
-            pr_err("launched '%s' not found\n", params.process_name);
+            pr_err("launched '%s' not found\n", ctx->parameters.process_name);
             err = -ESRCH;
             goto fail_start;
         }
-        pr_info("launched '%s' (TGID %d)\n", params.process_name, ctx->target_tgid);
+        pr_info("launched '%s' (TGID %d)\n", ctx->parameters.process_name, ctx->target_tgid);
 
         WRITE_ONCE(ctx->running, 1);
         WRITE_ONCE(ctx->target_alive, true);
 
         /* Compute absolute VA */
-        if (params.target_pc) {
+        if (ctx->parameters.target_pc) {
             struct pid *p_tmp = find_get_pid(ctx->target_tgid);
             struct task_struct *t = p_tmp ? pid_task(p_tmp, PIDTYPE_TGID) : NULL;
             struct mm_struct *m = t ? get_task_mm(t) : NULL;
@@ -147,7 +142,7 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
                 err = -EFAULT;
                 goto fail_start;
             }
-            ctx->target_pc = m->start_code + params.target_pc;
+            ctx->target_pc = m->start_code + ctx->parameters.target_pc;
             mmput(m);
             put_pid(p_tmp);
         } else {

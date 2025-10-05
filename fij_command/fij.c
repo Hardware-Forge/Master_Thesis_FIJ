@@ -26,7 +26,6 @@ static void set_process_name_from_path(struct fij_params *p) {
     if (!p || p->process_path[0] == '\0') return;
     const char *last_slash = strrchr(p->process_path, '/');
     const char *base = last_slash ? (last_slash + 1) : p->process_path;
-    // Ensure NUL termination
     strncpy(p->process_name, base, sizeof(p->process_name) - 1);
     p->process_name[sizeof(p->process_name) - 1] = '\0';
 }

@@ -43,7 +43,7 @@ static int uprobe_hit(struct uprobe_consumer *uc, struct pt_regs *regs, u64 *bp_
     if (current->tgid != READ_ONCE(ctx->target_tgid))
         return 0;
 
-    if (READ_ONCE(ctx->target_reg) != FIJ_REG_NONE) {
+    if (READ_ONCE(ctx->parameters.target_reg) != FIJ_REG_NONE) {
         /* flip the selected register bit */
         (void)fij_flip_register_from_ptregs(ctx, regs);
     } else {

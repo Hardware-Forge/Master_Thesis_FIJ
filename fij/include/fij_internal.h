@@ -51,10 +51,7 @@ struct fij_ctx {
     struct completion monitor_done;
     struct completion bitflip_done;
 
-    /* user params */
-    int  target_reg;             /* enum fij_reg_id */
-    int  reg_bit;
-    int weight_mem;
+    struct fij_params parameters;
 };
 
 static const char *fij_reg_name(int id)
