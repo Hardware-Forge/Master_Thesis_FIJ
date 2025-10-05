@@ -27,10 +27,8 @@ static int monitor_thread_fn(void *data)
 
     set_freezable();
 
-    /* Sleep until target exits OR we are asked to stop. */
     for (;;) {
         bool target_exited = READ_ONCE(leader->exit_state) != 0;
-
         if (target_exited) {
             exited = true;
             exit_code = READ_ONCE(leader->exit_code);
@@ -39,15 +37,14 @@ static int monitor_thread_fn(void *data)
         if (kthread_should_stop())
             break;
 
-        /* Killable wait so stop/wake can break us out immediately. */
         wait_event_killable_timeout(fij_mon_wq,
             kthread_should_stop() || READ_ONCE(leader->exit_state),
             msecs_to_jiffies(200));
-
         try_to_freeze();
     }
 
-    /* Transition to idle; real teardown happens in module exit. */
+    WRITE_ONCE(ctx->target_alive, false);
+
     WRITE_ONCE(ctx->running, 0);
 
     if (exited) {
@@ -65,13 +62,14 @@ static int monitor_thread_fn(void *data)
         pr_info("monitor thread stopped before target exited\n");
     }
 
-    complete(&ctx->monitor_done);              // tell unload we're done
+    complete(&ctx->monitor_done);
     WRITE_ONCE(ctx->pc_monitor_thread, NULL);
-    
-    put_task_struct(leader);  /* drop our ref */
+
+    put_task_struct(leader);
     kfree(ma);
     return 0;
 }
+
 
 int fij_monitor_start(struct fij_ctx *ctx)
 {

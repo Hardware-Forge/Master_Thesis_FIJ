@@ -29,6 +29,7 @@ struct fij_ctx {
     int                running;            /* 0/1 */
     int                remaining_cycles;   /* -1 = infinite */
     unsigned long      interval_ms;
+    bool target_alive;
 
     /* threads */
     struct task_struct *bitflip_thread;

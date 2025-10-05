@@ -97,19 +97,6 @@ int main(int argc, char *argv[]) {
 
         printf("Started fault injection for '%s' (%d cycles)\n", params.process_name, params.cycles);
         
-    } else if (argc == 2 && strcmp(argv[1], "stop") == 0) {
-        if (ioctl(fd, IOCTL_STOP_FAULT) < 0) {
-            perror("ioctl stop");
-            return 1;
-        }
-        printf("Fault injection stopped\n");
-    } else if (argc == 2 && strcmp(argv[1], "status") == 0) {
-        int status;
-        if (ioctl(fd, IOCTL_GET_STATUS, &status) < 0) {
-            perror("ioctl status");
-            return 1;
-        }
-        printf("Status: %s\n", status ? "Running" : "Idle");
     } else if (argc >= 2 && strcmp(argv[1], "exec") == 0) {
 	struct fij_params params = {0};
 	params.cycles = 0;  // default to infinite

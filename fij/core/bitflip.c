@@ -14,28 +14,32 @@ static int bitflip_thread_fn(void *data)
     init_completion(&ctx->bitflip_done);
 
     while (!kthread_should_stop()) {
+        
+        if (!READ_ONCE(ctx->target_alive))
+            break;
+
         int rem = READ_ONCE(ctx->remaining_cycles);
         if (!infinite && rem <= 0)
             break;
 
         if (fij_stop_flip_resume_one_random(ctx) == -ESRCH) {
-            pr_info("FIJ: target TGID %d gone; stopping\n", ctx->target_tgid);
+            pr_info("FIJ: target TGID %d gone; stopping bitflip\n", ctx->target_tgid);
             break;
         }
 
         if (!infinite)
             WRITE_ONCE(ctx->remaining_cycles, rem - 1);
 
-        /* Sleep until next tick, but be interruptible for unload/stop */
         if (msleep_interruptible(ctx->interval_ms))
             break;
     }
 
     complete(&ctx->bitflip_done);
-    ctx->bitflip_thread = NULL;
-    WRITE_ONCE(ctx->running, 0);
+    WRITE_ONCE(ctx->bitflip_thread, NULL);
+
     return 0;
 }
+
 
 int fij_flip_register_from_ptregs(struct fij_ctx *ctx, struct pt_regs *regs)
 {
