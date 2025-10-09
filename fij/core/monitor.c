@@ -99,14 +99,28 @@ int fij_monitor_start(struct fij_ctx *ctx)
     ma->ctx = ctx;
 
     ctx->pc_monitor_thread = kthread_run(monitor_thread_fn, ma, "fij_monitor");
+    int err = 0;
     if (IS_ERR(ctx->pc_monitor_thread)) {
-        int err = PTR_ERR(ctx->pc_monitor_thread);
+        err = PTR_ERR(ctx->pc_monitor_thread);
         ctx->pc_monitor_thread = NULL;
         put_task_struct(leader);
         kfree(ma);
         return err;
     }
-    return 0;
+
+    /* monitor thread decides the injection method (DET vs NON-DET) */
+
+    /* Arm uprobe if target_pc != NULL */
+    if (ctx->parameters.target_pc_present) {
+        /* probe is inserted at specified PC to start injection deterministically */
+        err = fij_uprobe_arm(ctx, ctx->target_pc);
+    }
+    else {
+        /* thread injects bitflip at random time is started */
+        err = fij_start_bitflip_thread(ctx);
+    }
+
+    return err;
 }
 
 void fij_monitor_stop(struct fij_ctx *ctx)

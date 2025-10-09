@@ -50,7 +50,7 @@ int fij_flip_register_from_ptregs(struct fij_ctx *ctx, struct pt_regs *regs)
     if (!ctx->parameters.target_reg)
     target_reg = fij_pick_random_reg_any();
     /* if bit is null pick a random value */
-    int bit = (ctx->parameters.reg_bit >= 0) ? ctx->parameters.reg_bit : fij_pick_random_bit64();
+    int bit = ctx->parameters.reg_bit_present ? ctx->parameters.reg_bit : fij_pick_random_bit64();
     unsigned long *p = fij_reg_ptr_from_ptregs(regs, target_reg);
 
     if (!p) {
@@ -211,7 +211,7 @@ int fij_flip_for_task(struct fij_ctx *ctx, struct task_struct *t)
 {
     struct pt_regs *regs = task_pt_regs(t);
 
-    if (choose_register_target(ctx->parameters.weight_mem)) {
+    if (choose_register_target(ctx->parameters.weight_mem, ctx->parameters.only_mem)) {
         if (!regs)
             return -EINVAL;
         return fij_flip_register_from_ptregs(ctx, regs);

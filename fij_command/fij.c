@@ -41,8 +41,10 @@ static int parse_common_params(int argc, char **argv, int start_idx, struct fij_
         } else if (strncmp(argv[i], "args=", 5) == 0) {
             strncpy(p->process_args, argv[i] + 5, sizeof(p->process_args) - 1);
             p->process_args[sizeof(p->process_args) - 1] = '\0';
-        } else if (strncmp(argv[i], "mem_weight=", 11) == 0) {
+        } else if (strncmp(argv[i], "weight_mem=", 11) == 0) {
             p->weight_mem = atoi(argv[i] + 11);
+        } else if (strncmp(argv[i], "only_mem=", 9) == 0) {
+            p->only_mem = (atoi(argv[i] + 9) != 0);
         }
     }
 
@@ -68,38 +70,12 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    if (argc >= 2 && strcmp(argv[1], "start") == 0) {
-	if (argc < 3) {
-    		fprintf(stderr, "Usage: %s start process=NAME [cycles=N]\n", argv[0]);
-    		return 1;
-	}
-
-	struct fij_params params = {0};
-	params.cycles = 0;  // default: infinite
-
-    // parse common fields (path, args)
-    if (parse_common_params(argc, argv, 2, &params) < 0) {
-        return 1;
-    }
-
-	// parse start-specific fields
-    for (int i = 2; i < argc; ++i) {
-        if (strncmp(argv[i], "cycles=", 7) == 0) {
-            params.cycles = atoi(argv[i] + 7);
-        }
-    }
-
-        if (ioctl(fd, IOCTL_START_FAULT, &params) < 0) {
-            perror("ioctl start");
-            return 1;
-        }
-
-        printf("Started fault injection for '%s' (%d cycles)\n", params.process_name, params.cycles);
-        
-    } else if (argc >= 2 && strcmp(argv[1], "exec") == 0) {
+    if (argc >= 2 && strcmp(argv[1], "exec") == 0) {
 	struct fij_params params = {0};
 	params.cycles = 0;  // default to infinite
+    params.target_pc_present = 0;
 	params.target_pc = 0;
+    params.reg_bit_present = 0;
 
     // parse common fields (path, args)
     if (parse_common_params(argc, argv, 2, &params) < 0) return 1;
@@ -108,6 +84,7 @@ int main(int argc, char *argv[]) {
         if (strncmp(argv[i], "cycles=", 7) == 0) {
             params.cycles = atoi(argv[i] + 7);
         } else if (strncmp(argv[i], "pc=", 3) == 0) {
+            params.target_pc_present = 1;
             params.target_pc = (unsigned long)strtoull(argv[i] + 3, NULL, 0);
         } else if (strncmp(argv[i], "reg=", 4) == 0) {
             const char *nm = argv[i] + 4;
@@ -119,6 +96,7 @@ int main(int argc, char *argv[]) {
         } else if (strncmp(argv[i], "bit=", 4) == 0) {
             char *end = NULL;
             long b = strtol(argv[i] + 4, &end, 0);
+            params.reg_bit_present = 1;
             if (end == argv[i] + 4 || b < 0 || b > 63) {
                 fprintf(stderr, "Invalid bit index (0..63): %s\n", argv[i] + 4);
                 return 1;

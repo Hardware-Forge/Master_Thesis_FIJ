@@ -121,8 +121,11 @@ int fij_pick_random_bit64(void)
     return get_random_u32() & 63;    /* 0..63 */
 }
 
-bool choose_register_target(int weight_mem)
+bool choose_register_target(int weight_mem, int only_mem)
 {
+    if(only_mem) {
+        return 0;
+    }
     const u32 weight_regs = 1;
 
     /* sanitize signed input: negatives behave like 0 */

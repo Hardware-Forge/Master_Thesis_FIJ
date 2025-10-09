@@ -39,48 +39,6 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
     struct fij_ctx *ctx = file->private_data;
 
     switch (cmd) {
-    case IOCTL_START_FAULT: {
-    char **argv = NULL;
-    char *path_copy = NULL, *args_copy = NULL;
-    int err = 0;
-
-    if (copy_from_user(&ctx->parameters, (void __user *)arg, sizeof(ctx->parameters)))
-        return -EFAULT;
-
-    if (READ_ONCE(ctx->running))
-        return -EBUSY;
-
-    err = fij_build_argv_from_params(&ctx->parameters, &argv, &path_copy, &args_copy);
-    if (err) goto fail_start;
-
-    err = fij_exec_and_stop(path_copy, argv, &ctx->target_tgid);
-    if (err) goto fail_start;
-
-    if (ctx->target_tgid < 0) {
-        pr_err("launched '%s' not found\n", ctx->parameters.process_name);
-        err = -ESRCH; goto fail_start;
-    }
-    pr_info("launched '%s' (TGID %d)\n", ctx->parameters.process_name, ctx->target_tgid);
-
-    WRITE_ONCE(ctx->running, 1);
-    WRITE_ONCE(ctx->target_alive, true);
-
-    ctx->remaining_cycles = (ctx->parameters.cycles == 0) ? -1 : ctx->parameters.cycles;
-
-    err = fij_monitor_start(ctx);
-    if (err) { pr_err("monitor start failed: %d\n", err); goto fail_start; }
-
-    err = fij_start_bitflip_thread(ctx);
-    if (err) goto fail_start;
-
-    pr_info("started fault injection on '%s' (TGID %d) for %d cycles\n",
-            ctx->parameters.process_name, ctx->target_tgid, ctx->parameters.cycles);
-
-    kfree(argv);
-    kfree(args_copy);
-    kfree(path_copy);
-    return 0;
-    }
     case IOCTL_EXEC_AND_FAULT: {
         char **argv = NULL;
         char *path_copy = NULL, *args_copy = NULL, *cursor = NULL;
@@ -130,44 +88,43 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         WRITE_ONCE(ctx->running, 1);
         WRITE_ONCE(ctx->target_alive, true);
 
-        /* Compute absolute VA */
-        if (ctx->parameters.target_pc) {
-            struct pid *p_tmp = find_get_pid(ctx->target_tgid);
-            struct task_struct *t = p_tmp ? pid_task(p_tmp, PIDTYPE_TGID) : NULL;
-            struct mm_struct *m = t ? get_task_mm(t) : NULL;
+        /* if PC delay is specified initialize parameter */
+        if (ctx->parameters.target_pc_present) {
+            /* Compute absolute VA */
+            if (ctx->parameters.target_pc) {
+                struct pid *p_tmp = find_get_pid(ctx->target_tgid);
+                struct task_struct *t = p_tmp ? pid_task(p_tmp, PIDTYPE_TGID) : NULL;
+                struct mm_struct *m = t ? get_task_mm(t) : NULL;
+    
+                if (!t || !m) {
+                    if (m) mmput(m);
+                    if (p_tmp) put_pid(p_tmp);
+                    err = -EFAULT;
+                    goto fail_start;
+                }
 
-            if (!t || !m) {
-                if (m) mmput(m);
-                if (p_tmp) put_pid(p_tmp);
-                err = -EFAULT;
-                goto fail_start;
+                ctx->target_pc = m->start_code + ctx->parameters.target_pc;
+                mmput(m);
+                put_pid(p_tmp);
+                
+            } else {
+                struct pid *p_tmp = find_get_pid(ctx->target_tgid);
+                struct task_struct *t = p_tmp ? pid_task(p_tmp, PIDTYPE_TGID) : NULL;
+                struct mm_struct *m = t ? get_task_mm(t) : NULL;
+                ctx->target_pc = m->start_code;
             }
-            ctx->target_pc = m->start_code + ctx->parameters.target_pc;
-            mmput(m);
-            put_pid(p_tmp);
-        } else {
-            struct pid *p_tmp = find_get_pid(ctx->target_tgid);
-            struct task_struct *t = p_tmp ? pid_task(p_tmp, PIDTYPE_TGID) : NULL;
-            struct mm_struct *m = t ? get_task_mm(t) : NULL;
-            ctx->target_pc = m->start_code;
         }
 
-        /* Arm uprobe if target_pc != 0 */
-        if (ctx->target_pc != 0) {
-            err = fij_uprobe_arm(ctx, ctx->target_pc);
-            if (err)
-                goto fail_start;
-        }
+        /* Start monitor thread to clean up when target exits */
+        err = fij_monitor_start(ctx);
+        if (err)
+            goto fail_start;
 
         /* Resume process */
         err = fij_send_cont(ctx->target_tgid);
         if (err)
             goto fail_start;
 
-        /* Start monitor thread to clean up when target exits */
-        err = fij_monitor_start(ctx);
-        if (err)
-            goto fail_start;
 
         /* Success path: free argv holders (argv elements point into path_copy / args_copy) */
         kfree(argv);

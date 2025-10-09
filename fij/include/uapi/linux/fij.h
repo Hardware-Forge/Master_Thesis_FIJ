@@ -22,9 +22,12 @@ struct fij_params {
     char process_args[256];
     int  cycles;
     int target_pc;     /* offset from start_code in INT */
+    int target_pc_present;
     int  target_reg;             /* enum fij_reg_id */
     int  reg_bit;
+    int reg_bit_present;
     int weight_mem;
+    int only_mem;
 };
 
 /* IOCTLs */

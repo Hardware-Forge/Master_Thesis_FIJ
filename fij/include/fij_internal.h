@@ -111,6 +111,6 @@ struct task_struct *fij_pick_random_user_thread(int tgid);
 struct task_struct *fij_rcu_find_get_task_by_tgid(pid_t tgid);
 int fij_pick_random_bit64(void);
 enum fij_reg_id fij_pick_random_reg_any(void);
-bool choose_register_target(int weight_mem);
+bool choose_register_target(int weight_mem, int only_mem);
 
 #endif /* _LINUX_FIJ_INTERNAL_H */
