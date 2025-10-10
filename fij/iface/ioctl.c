@@ -50,8 +50,6 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         if (READ_ONCE(ctx->running))
             return -EBUSY;
 
-        // here the remaning cycles are always set to 1. the logic has to be changed from cycles to array of PCs
-        ctx->remaining_cycles = 1;
         WRITE_ONCE(ctx->running, 1);
 
         argv = kcalloc(FIJ_MAX_ARGC + 2, sizeof(char *), GFP_KERNEL);
@@ -85,7 +83,6 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         }
         pr_info("launched '%s' (TGID %d)\n", ctx->parameters.process_name, ctx->target_tgid);
 
-        WRITE_ONCE(ctx->running, 1);
         WRITE_ONCE(ctx->target_alive, true);
 
         /* if PC delay is specified initialize parameter */
@@ -125,19 +122,11 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         if (err)
             goto fail_start;
 
-
-        /* Success path: free argv holders (argv elements point into path_copy / args_copy) */
-        kfree(argv);
-        kfree(args_copy);
-        kfree(path_copy);
-        return 0;
-
 fail_start:
         /* best-effort cleanup / state reset */
         kfree(argv);
         kfree(args_copy);
         kfree(path_copy);
-        WRITE_ONCE(ctx->running, 0);
         return err;
     }
 

@@ -45,8 +45,6 @@ static int monitor_thread_fn(void *data)
 
     WRITE_ONCE(ctx->target_alive, false);
 
-    WRITE_ONCE(ctx->running, 0);
-
     if (exited) {
         int sig = exit_code & 0x7f;
         bool coredump = !!(exit_code & 0x80);
@@ -64,6 +62,8 @@ static int monitor_thread_fn(void *data)
 
     complete(&ctx->monitor_done);
     WRITE_ONCE(ctx->pc_monitor_thread, NULL);
+
+    WRITE_ONCE(ctx->running, 0);
 
     put_task_struct(leader);
     kfree(ma);

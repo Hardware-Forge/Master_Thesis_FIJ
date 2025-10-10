@@ -27,10 +27,6 @@ static void fij_uprobe_post_actions(struct fij_ctx *ctx)
         if (atomic_xchg(&ctx->uprobe_disarm_queued, 1) == 0)
             schedule_work(&ctx->uprobe_disarm_work);
     }
-
-    /* If more cycles requested, spin up the periodic thread */
-    if (READ_ONCE(ctx->remaining_cycles) != 1 && !ctx->bitflip_thread)
-        (void)fij_start_bitflip_thread(ctx);
 }
 
 /* uprobe hit: called in target context */

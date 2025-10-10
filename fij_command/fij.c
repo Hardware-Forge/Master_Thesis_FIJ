@@ -45,6 +45,10 @@ static int parse_common_params(int argc, char **argv, int start_idx, struct fij_
             p->weight_mem = atoi(argv[i] + 11);
         } else if (strncmp(argv[i], "only_mem=", 9) == 0) {
             p->only_mem = (atoi(argv[i] + 9) != 0);
+        } else if (strncmp(argv[i], "min_delay_ms=", 13) == 0) {
+            p->min_delay_ms = atoi(argv[i] + 13);
+        } else if (strncmp(argv[i], "max_delay_ms=", 13) == 0) {
+            p->max_delay_ms = atoi(argv[i] + 13);
         }
     }
 
@@ -62,6 +66,43 @@ static int parse_common_params(int argc, char **argv, int start_idx, struct fij_
     return 0;
 }
 
+static void fij_params_apply_defaults(struct fij_params *p)
+{
+    if (!p) return;
+
+    /* Strings were zeroed by {0}; ensure process_name if path was set */
+    if (p->process_name[0] == '\0' && p->process_path[0] != '\0')
+        set_process_name_from_path(p);
+
+    /* Normalize booleans */
+    p->only_mem = !!p->only_mem;
+
+    /* Weights / counters */
+    if (p->weight_mem < 0) p->weight_mem = 0;          /* clamp negatives */
+    if (p->cycles < 0)     p->cycles     = 0;          /* 0 == infinite */
+
+    /* Register targeting */
+    if (p->target_reg == 0) p->target_reg = FIJ_REG_NONE;
+
+    if (!p->reg_bit_present) {
+        p->reg_bit = 0;                                /* ignored by kernel */
+    } else {
+        if (p->reg_bit < 0)   p->reg_bit = 0;
+        if (p->reg_bit > 63)  p->reg_bit = 63;
+    }
+
+    /* PC targeting */
+    if (!p->target_pc_present)
+        p->target_pc = 0;                              /* ignored by kernel */
+
+    /* Delays: leave (0,0) to trigger kernel defaults.
+       If user supplied both but swapped, fix the order. */
+    if (p->min_delay_ms && p->max_delay_ms && p->max_delay_ms < p->min_delay_ms) {
+        unsigned int tmp = p->min_delay_ms;
+        p->min_delay_ms = p->max_delay_ms;
+        p->max_delay_ms = tmp;
+    }
+}
 
 int main(int argc, char *argv[]) {
     int fd = open("/dev/fij", O_RDWR);
@@ -81,9 +122,7 @@ int main(int argc, char *argv[]) {
     if (parse_common_params(argc, argv, 2, &params) < 0) return 1;
 
 	for (int i = 2; i < argc; ++i) {
-        if (strncmp(argv[i], "cycles=", 7) == 0) {
-            params.cycles = atoi(argv[i] + 7);
-        } else if (strncmp(argv[i], "pc=", 3) == 0) {
+        if (strncmp(argv[i], "pc=", 3) == 0) {
             params.target_pc_present = 1;
             params.target_pc = (unsigned long)strtoull(argv[i] + 3, NULL, 0);
         } else if (strncmp(argv[i], "reg=", 4) == 0) {
@@ -104,6 +143,8 @@ int main(int argc, char *argv[]) {
             params.reg_bit = (int)b;
         }
     }
+        /* initialize uninitialized params */
+        fij_params_apply_defaults(&params);
 
         if (ioctl(fd, IOCTL_EXEC_AND_FAULT, &params) < 0) {
             perror("ioctl exec");

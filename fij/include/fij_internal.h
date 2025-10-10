@@ -26,9 +26,7 @@ struct fij_ctx {
     unsigned long      target_pc;          /* absolute VA */
 
     /* status */
-    int                running;            /* 0/1 */
-    int                remaining_cycles;   /* -1 = infinite */
-    unsigned long      interval_ms;
+    int                running;
     bool target_alive;
 
     /* threads */

@@ -126,6 +126,7 @@ bool choose_register_target(int weight_mem, int only_mem)
     if(only_mem) {
         return 0;
     }
+    pr_info("only mem %d, weight mem %d\n", only_mem, weight_mem);
     const u32 weight_regs = 1;
 
     /* sanitize signed input: negatives behave like 0 */

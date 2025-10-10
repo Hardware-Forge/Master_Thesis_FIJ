@@ -6,39 +6,53 @@
 #include <linux/uaccess.h>
 #include <linux/delay.h>
 
+int DEFAULT_MIN_DELAY_MS = 0;
+int DEFAULT_MAX_DELAY_MS = 1000;
+
+/* Helper: random ms in [min,max] (inclusive) */
+int fij_random_ms(int min_ms, int max_ms)
+{
+    if (max_ms < min_ms) {
+        int tmp = min_ms; min_ms = max_ms; max_ms = tmp;
+    }
+    int span = (max_ms - min_ms) + 1u;
+
+    return min_ms + (int)get_random_u32_below(span);
+    
+}
+
 static int bitflip_thread_fn(void *data)
 {
     struct fij_ctx *ctx = data;
-    int infinite = (READ_ONCE(ctx->remaining_cycles) < 0);
-    
-    ctx->interval_ms = 300;
+    int min = READ_ONCE(ctx->parameters.min_delay_ms);
+    int max = READ_ONCE(ctx->parameters.max_delay_ms);
+    int min_ms = (min > 0) ? min : DEFAULT_MIN_DELAY_MS;
+    int max_ms = max ? max : DEFAULT_MAX_DELAY_MS;
+    int delay_ms;
 
     init_completion(&ctx->bitflip_done);
 
-    while (!kthread_should_stop()) {
-
-        if (!READ_ONCE(ctx->target_alive))
-            break;
-
-        int rem = READ_ONCE(ctx->remaining_cycles);
-        if (!infinite && rem <= 0)
-            break;
-
-        if (fij_stop_flip_resume_one_random(ctx) == -ESRCH) {
-            pr_info("FIJ: target TGID %d gone; stopping bitflip\n", ctx->target_tgid);
-            break;
-        }
-
-        if (!infinite)
-            WRITE_ONCE(ctx->remaining_cycles, rem - 1);
-
-        if (msleep_interruptible(ctx->interval_ms))
-            break;
+    /* Sleep a random time before injecting */
+    delay_ms = fij_random_ms(min_ms, max_ms);
+    if (delay_ms) {
+        /* interruptible so kthread_stop() can cancel */
+        if (msleep_interruptible(delay_ms))
+            goto out;  /* woke by signal/stop */
     }
 
+    /* check liveness/stop after the sleep */
+    if (!READ_ONCE(ctx->target_alive) || kthread_should_stop())
+        goto out;
+
+    /* Perform exactly one flip (register or memory) */
+    if (fij_stop_flip_resume_one_random(ctx) == -ESRCH) {
+        pr_info("FIJ: target TGID %d gone; aborting bitflip\n",
+                ctx->target_tgid);
+    }
+
+out:
     complete(&ctx->bitflip_done);
     WRITE_ONCE(ctx->bitflip_thread, NULL);
-
     return 0;
 }
 
@@ -227,12 +241,10 @@ int fij_start_bitflip_thread(struct fij_ctx *ctx)
     if (ctx->bitflip_thread)
         return -EBUSY;
 
-    WRITE_ONCE(ctx->running, 1);
     ctx->bitflip_thread = kthread_run(bitflip_thread_fn, ctx, "fij_bitflip");
     if (IS_ERR(ctx->bitflip_thread)) {
         int err = PTR_ERR(ctx->bitflip_thread);
         ctx->bitflip_thread = NULL;
-        WRITE_ONCE(ctx->running, 0);
         return err;
     }
     return 0;

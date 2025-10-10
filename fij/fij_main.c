@@ -8,17 +8,11 @@ MODULE_AUTHOR("Andrea Carbonetti");
 MODULE_DESCRIPTION("Runtime-controlled Fault Injection Kernel Module");
 MODULE_VERSION("0.2");
 
-/* Module params */
-static unsigned long interval_ms = 1;
-module_param(interval_ms, ulong, 0644);
-MODULE_PARM_DESC(interval_ms, "Delay between bitflips (ms)");
-
 static struct fij_ctx g_ctx;
 
 static void fij_ctx_init(struct fij_ctx *ctx)
 {
     memset(ctx, 0, sizeof(*ctx));
-    ctx->interval_ms = interval_ms;
 
     INIT_WORK(&ctx->uprobe_disarm_work, NULL); /* real fn set below */
     /* We re-init with the proper function pointer here: */

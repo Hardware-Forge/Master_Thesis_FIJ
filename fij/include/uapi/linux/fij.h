@@ -28,6 +28,8 @@ struct fij_params {
     int reg_bit_present;
     int weight_mem;
     int only_mem;
+    int min_delay_ms;
+    int max_delay_ms;
 };
 
 /* IOCTLs */
