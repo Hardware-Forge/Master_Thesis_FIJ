@@ -52,6 +52,8 @@ static int parse_common_params(int argc, char **argv, int start_idx, struct fij_
         } else if (strncmp(argv[i], "thread=", 7) == 0) {
             p->thread_present=1;
             p->thread = atoi(argv[i] + 7);
+        } else if (strncmp(argv[i], "all_threads=", 12) == 0) {
+                    p->all_threads = (atoi(argv[i] + 12) != 0);
         }
     }
 
