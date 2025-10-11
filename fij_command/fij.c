@@ -49,6 +49,9 @@ static int parse_common_params(int argc, char **argv, int start_idx, struct fij_
             p->min_delay_ms = atoi(argv[i] + 13);
         } else if (strncmp(argv[i], "max_delay_ms=", 13) == 0) {
             p->max_delay_ms = atoi(argv[i] + 13);
+        } else if (strncmp(argv[i], "thread=", 7) == 0) {
+            p->thread_present=1;
+            p->thread = atoi(argv[i] + 7);
         }
     }
 
@@ -84,6 +87,8 @@ static void fij_params_apply_defaults(struct fij_params *p)
     /* Register targeting */
     if (p->target_reg == 0) p->target_reg = FIJ_REG_NONE;
 
+    if(!p->thread_present) p->thread = 0;
+
     if (!p->reg_bit_present) {
         p->reg_bit = 0;                                /* ignored by kernel */
     } else {
@@ -117,6 +122,7 @@ int main(int argc, char *argv[]) {
     params.target_pc_present = 0;
 	params.target_pc = 0;
     params.reg_bit_present = 0;
+    params.thread_present = 0;
 
     // parse common fields (path, args)
     if (parse_common_params(argc, argv, 2, &params) < 0) return 1;

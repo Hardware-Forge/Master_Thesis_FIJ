@@ -3,6 +3,8 @@
 #include <linux/mm_types.h>
 #include <linux/random.h>
 #include <linux/sched/signal.h>
+#include <linux/sched.h>
+#include <linux/hrtimer.h>
 #include <linux/uaccess.h>
 #include <linux/delay.h>
 
@@ -21,34 +23,55 @@ int fij_random_ms(int min_ms, int max_ms)
     
 }
 
-static int bitflip_thread_fn(void *data)
+int fij_sleep_hrtimeout_interruptible(unsigned int delay_us)
+{
+    ktime_t kt;
+
+    if (!delay_us)
+        return 0;
+
+    /* schedule_hrtimeout expects ktime in ns */
+    kt = ktime_set(0, (u64)delay_us * NSEC_PER_USEC);
+    pr_info("FIJ: sleep %u us (%lld ns)\n",
+            delay_us, (long long)ktime_to_ns(kt));
+
+    /* Put task into interruptible state so signals/kthread_stop can wake it */
+    set_current_state(TASK_INTERRUPTIBLE);
+    return schedule_hrtimeout(&kt, HRTIMER_MODE_REL);
+}
+
+int bitflip_thread_fn(void *data)
 {
     struct fij_ctx *ctx = data;
     int min = READ_ONCE(ctx->parameters.min_delay_ms);
     int max = READ_ONCE(ctx->parameters.max_delay_ms);
     int min_ms = (min > 0) ? min : DEFAULT_MIN_DELAY_MS;
     int max_ms = max ? max : DEFAULT_MAX_DELAY_MS;
-    int delay_ms;
+    int delay_ms, ret;
 
     init_completion(&ctx->bitflip_done);
 
     /* Sleep a random time before injecting */
     delay_ms = fij_random_ms(min_ms, max_ms);
-    if (delay_ms) {
-        /* interruptible so kthread_stop() can cancel */
-        if (msleep_interruptible(delay_ms))
-            goto out;  /* woke by signal/stop */
+    if (delay_ms >= 0) {
+        if (delay_ms > 1 && max_ms > 1) {
+            /* millisecond path (unchanged) */
+            if (msleep_interruptible(delay_ms))
+                goto out;  /* woke by signal/stop */
+        } else {
+            delay_ms = fij_random_ms(0, 1000);
+            /* sub-ms path via hrtimer */
+            ret = fij_sleep_hrtimeout_interruptible(delay_ms); /* ms -> us */
+            if (ret)      /* interrupted by signal or stop */
+                goto out;
+        }
     }
 
-    /* check liveness/stop after the sleep */
     if (!READ_ONCE(ctx->target_alive) || kthread_should_stop())
         goto out;
 
-    /* Perform exactly one flip (register or memory) */
-    if (fij_stop_flip_resume_one_random(ctx) == -ESRCH) {
-        pr_info("FIJ: target TGID %d gone; aborting bitflip\n",
-                ctx->target_tgid);
-    }
+    if (fij_stop_flip_resume_one_random(ctx) == -ESRCH)
+        pr_info("FIJ: target TGID %d gone; aborting bitflip\n", ctx->target_tgid);
 
 out:
     complete(&ctx->bitflip_done);
@@ -180,7 +203,10 @@ int fij_stop_flip_resume_one_random(struct fij_ctx *ctx)
     struct task_struct *t;
     int ret = 0;
 
-    t = fij_pick_random_user_thread(ctx->target_tgid);
+    if(ctx->parameters.thread_present)
+        t = fij_pick_user_thread_by_index(ctx->target_tgid, ctx->parameters.thread);
+    else
+        t = fij_pick_random_user_thread(ctx->target_tgid);
     if (!t)
         return -ESRCH;
 

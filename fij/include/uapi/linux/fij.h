@@ -30,6 +30,8 @@ struct fij_params {
     int only_mem;
     int min_delay_ms;
     int max_delay_ms;
+    int thread_present;
+    int thread;
 };
 
 /* IOCTLs */

@@ -108,6 +108,48 @@ struct task_struct *fij_pick_random_user_thread(int tgid)
     return chosen; /* ref held if non-NULL */
 }
 
+struct task_struct *fij_pick_user_thread_by_index(int tgid, int n1)
+{
+    struct task_struct *g, *t, *chosen = NULL;
+    unsigned int cnt = 0, idx = 0, target;
+
+    if (n1 <= 0)
+        return fij_pick_random_user_thread(tgid);
+
+    rcu_read_lock();
+    g = fij_rcu_find_get_task_by_tgid(tgid);
+    if (!g) { rcu_read_unlock(); return NULL; }
+    get_task_struct(g); /* hold a ref to the group leader */
+
+    /* Count eligible threads (user threads only) */
+    for_each_thread(g, t) {
+        if (t->mm && !(t->flags & PF_KTHREAD))
+            cnt++;
+    }
+    if (!cnt || (unsigned int)(n1 - 1) >= cnt) {
+        rcu_read_unlock();
+        put_task_struct(g);
+        return NULL;
+    }
+
+    /* Convert to 0-index target and walk again to grab it */
+    target = (unsigned int)(n1 - 1);
+
+    for_each_thread(g, t) {
+        if (t->mm && !(t->flags & PF_KTHREAD)) {
+            if (idx++ == target) {
+                get_task_struct(t); /* hold a ref for the caller */
+                chosen = t;
+                break;
+            }
+        }
+    }
+    pr_info("thread %d chosen\n", target+1);
+    rcu_read_unlock();
+    put_task_struct(g);
+    return chosen; /* ref held if non-NULL */
+}
+
 /* Pick a random register id in [FIJ_REG_RAX .. FIJ_REG_MAX-1] */
 enum fij_reg_id fij_pick_random_reg_any(void)
 {
