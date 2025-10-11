@@ -1,0 +1,99 @@
+# Top-level Makefile (placed in the parent directory)
+# Layout:
+#   ./fij           -> kernel module
+#   ./fij_command   -> userspace CLI
+
+# Allow overrides like: make KDIR=/path/to/kernel build-module
+KDIR        ?=
+INCDIRS     ?=
+SUDO        ?= sudo
+
+KMOD_DIR    := fij
+USER_DIR    := fij_command
+
+.PHONY: all build install uninstall \
+        build-module install-module remove-module clean-module \
+        build-user install-user uninstall-user clean-user \
+        clean distclean run logs help
+
+# Default: build everything (module first, then userspace)
+all: build
+
+build: build-module build-user
+
+############################
+# Kernel module delegation #
+############################
+build-module:
+	@$(MAKE) -C $(KMOD_DIR) $(if $(KDIR),KDIR=$(KDIR))
+
+install-module:
+	@$(MAKE) -C $(KMOD_DIR) $(if $(KDIR),KDIR=$(KDIR)) install-module
+
+remove-module:
+	@$(MAKE) -C $(KMOD_DIR) $(if $(KDIR),KDIR=$(KDIR)) remove-module
+
+clean-module:
+	@$(MAKE) -C $(KMOD_DIR) $(if $(KDIR),KDIR=$(KDIR)) clean
+
+run:
+	@$(MAKE) -C $(KMOD_DIR) run
+
+logs:
+	@$(MAKE) -C $(KMOD_DIR) logs
+
+############################
+# Userspace delegation     #
+############################
+build-user:
+	@$(MAKE) -C $(USER_DIR) $(if $(INCDIRS),INCDIRS="$(INCDIRS)")
+
+install-user:
+	@$(MAKE) -C $(USER_DIR) $(if $(INCDIRS),INCDIRS="$(INCDIRS)") install
+
+uninstall-user:
+	@$(MAKE) -C $(USER_DIR) uninstall
+
+clean-user:
+	@$(MAKE) -C $(USER_DIR) clean
+
+#####################################
+# Ordered system-wide install steps #
+#####################################
+# IMPORTANT: install module first, then userspace.
+install:
+	@$(MAKE) install-module
+	@$(MAKE) install-user
+
+# Reverse order on uninstall: remove userspace, then module
+uninstall:
+	@$(MAKE) uninstall-user
+	@$(MAKE) remove-module
+
+############################
+# Cleaning                 #
+############################
+clean: clean-module clean-user
+distclean: clean
+
+############################
+# Help                     #
+############################
+help:
+	@echo "Targets:"
+	@echo "  build (default)   - build kernel module then userspace"
+	@echo "  install           - install kernel module, then userspace"
+	@echo "  uninstall         - uninstall userspace, then remove kernel module"
+	@echo "  build-module      - build only the kernel module"
+	@echo "  install-module    - insmod the kernel module"
+	@echo "  remove-module     - rmmod the kernel module"
+	@echo "  build-user        - build only the userspace program"
+	@echo "  install-user      - install the userspace program"
+	@echo "  uninstall-user    - uninstall the userspace program"
+	@echo "  run               - load module and print usage hint"
+	@echo "  logs              - follow kernel logs"
+	@echo "  clean             - clean both subprojects"
+	@echo ""
+	@echo "Variables:"
+	@echo "  KDIR=/path/to/kernel/build   (override kernel build dir if needed)"
+	@echo "  INCDIRS='-I... -I...'        (override userspace include dirs)"
