@@ -198,10 +198,88 @@ out_put_task:
     return ret;
 }
 
+static int fij_stop_flip_resume_all_threads(struct fij_ctx *ctx)
+{
+    struct task_struct *g = NULL, *t;
+    int ret = 0, first_err = 0;
+    bool did_mem = false;
+
+    /* Find group leader of TGID and SIGSTOP the whole group */
+    rcu_read_lock();
+    g = fij_rcu_find_get_task_by_tgid(ctx->target_tgid);
+    if (g)
+        get_task_struct(g);
+    rcu_read_unlock();
+
+    if (!g)
+        return -ESRCH;
+
+    send_sig(SIGSTOP, g, 1);
+
+    /*
+     * Iterate all threads in the group.
+     * Note: for_each_thread() requires tasklist safety; the group is
+     * stopping and we take a ref while touching each 't'.
+     */
+    for_each_thread(g, t) {
+        int this_ret;
+
+        if (t->flags & PF_KTHREAD)   /* skip kernel threads just in case */
+            continue;
+
+        get_task_struct(t);
+
+        /* Wait for this thread to reach stopped state */
+        this_ret = fij_wait_task_stopped(t, msecs_to_jiffies(500));
+        if (this_ret) {
+            if (!first_err) first_err = this_ret;
+            put_task_struct(t);
+            continue;
+        }
+
+        /* Perform the flip:
+         *  - If target is register: do it per-thread
+         *  - If target is memory: do it once per process (did_mem gate)
+         */
+        if (choose_register_target(ctx->parameters.weight_mem, ctx->parameters.only_mem)) {
+            struct pt_regs *regs = task_pt_regs(t);
+            if (!regs) {
+                this_ret = -EINVAL;
+            } else {
+                this_ret = fij_flip_register_from_ptregs(ctx, regs);
+            }
+        } else {
+            if (!did_mem) {
+                this_ret = fij_perform_mem_bitflip(ctx);
+                did_mem = (this_ret == 0);
+            } else {
+                this_ret = 0; /* already did the process-wide mem flip */
+            }
+        }
+
+        if (this_ret && !first_err) first_err = this_ret;
+
+        put_task_struct(t);
+    }
+
+    /* Resume the whole group */
+    send_sig(SIGCONT, g, 1);
+    put_task_struct(g);
+
+    /*
+     * If at least one thread op succeeded, return 0.
+     * Otherwise return the first error we saw.
+     */
+    return first_err;
+}
+
 int fij_stop_flip_resume_one_random(struct fij_ctx *ctx)
 {
     struct task_struct *t;
     int ret = 0;
+
+    if (READ_ONCE(ctx->parameters.all_threads))
+        return fij_stop_flip_resume_all_threads(ctx);
 
     if(ctx->parameters.thread_present)
         t = fij_pick_user_thread_by_index(ctx->target_tgid, ctx->parameters.thread);

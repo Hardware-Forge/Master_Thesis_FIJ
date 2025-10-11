@@ -32,6 +32,7 @@ struct fij_params {
     int max_delay_ms;
     int thread_present;
     int thread;
+    int all_threads;
 };
 
 /* IOCTLs */
