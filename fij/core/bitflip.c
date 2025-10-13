@@ -11,6 +11,35 @@
 int DEFAULT_MIN_DELAY_MS = 0;
 int DEFAULT_MAX_DELAY_MS = 1000;
 
+static int fij_group_stop(pid_t tgid)
+{
+    struct task_struct *g = NULL;
+
+    rcu_read_lock();
+    g = fij_rcu_find_get_task_by_tgid(tgid);
+    if (g)
+        get_task_struct(g);
+    rcu_read_unlock();
+
+    if (!g)
+        return -ESRCH;
+
+    send_sig(SIGSTOP, g, 1);
+    put_task_struct(g);
+    return 0;
+}
+
+static void fij_group_cont(pid_t tgid)
+{
+    struct task_struct *g = NULL;
+
+    rcu_read_lock();
+    g = fij_rcu_find_get_task_by_tgid(tgid);
+    if (g)
+        send_sig(SIGCONT, g, 1);
+    rcu_read_unlock();
+}
+
 /* Helper: random ms in [min,max] (inclusive) */
 int fij_random_ms(int min_ms, int max_ms)
 {
@@ -204,17 +233,17 @@ static int fij_stop_flip_resume_all_threads(struct fij_ctx *ctx)
     int ret = 0, first_err = 0;
     bool did_mem = false;
 
-    /* Find group leader of TGID and SIGSTOP the whole group */
+    /* Stop the whole group via helper */
+    ret = fij_group_stop(ctx->target_tgid);
+    if (ret)
+        return ret;
+
+    /* Reacquire leader with a ref for iteration */
     rcu_read_lock();
     g = fij_rcu_find_get_task_by_tgid(ctx->target_tgid);
     if (g)
         get_task_struct(g);
     rcu_read_unlock();
-
-    if (!g)
-        return -ESRCH;
-
-    send_sig(SIGSTOP, g, 1);
 
     /*
      * Iterate all threads in the group.
@@ -224,23 +253,20 @@ static int fij_stop_flip_resume_all_threads(struct fij_ctx *ctx)
     for_each_thread(g, t) {
         int this_ret;
 
-        if (t->flags & PF_KTHREAD)   /* skip kernel threads just in case */
+        if (t->flags & PF_KTHREAD)   /* skip kernel threads */
             continue;
 
         get_task_struct(t);
 
         /* Wait for this thread to reach stopped state */
-        this_ret = fij_wait_task_stopped(t, msecs_to_jiffies(500));
+        this_ret = fij_wait_task_stopped(t, msecs_to_jiffies(100));
         if (this_ret) {
             if (!first_err) first_err = this_ret;
             put_task_struct(t);
             continue;
         }
 
-        /* Perform the flip:
-         *  - If target is register: do it per-thread
-         *  - If target is memory: do it once per process (did_mem gate)
-         */
+        /* Perform the flip (unchanged logic) */
         if (choose_register_target(ctx->parameters.weight_mem, ctx->parameters.only_mem)) {
             struct pt_regs *regs = task_pt_regs(t);
             if (!regs) {
@@ -262,8 +288,8 @@ static int fij_stop_flip_resume_all_threads(struct fij_ctx *ctx)
         put_task_struct(t);
     }
 
-    /* Resume the whole group */
-    send_sig(SIGCONT, g, 1);
+    /* Resume the whole group via helper */
+    fij_group_cont(ctx->target_tgid);
     put_task_struct(g);
 
     /*
@@ -273,6 +299,7 @@ static int fij_stop_flip_resume_all_threads(struct fij_ctx *ctx)
     return first_err;
 }
 
+
 int fij_stop_flip_resume_one_random(struct fij_ctx *ctx)
 {
     struct task_struct *t;
@@ -281,25 +308,18 @@ int fij_stop_flip_resume_one_random(struct fij_ctx *ctx)
     if (READ_ONCE(ctx->parameters.all_threads))
         return fij_stop_flip_resume_all_threads(ctx);
 
-    if(ctx->parameters.thread_present)
+    if (ctx->parameters.thread_present)
         t = fij_pick_user_thread_by_index(ctx->target_tgid, ctx->parameters.thread);
     else
         t = fij_pick_random_user_thread(ctx->target_tgid);
     if (!t)
         return -ESRCH;
 
-    /* Group-stop the process via SIGSTOP (affects all threads) */
-    {
-        struct task_struct *g;
-        rcu_read_lock();
-        g = fij_rcu_find_get_task_by_tgid(ctx->target_tgid);
-        if (g) get_task_struct(g);
-        rcu_read_unlock();
-
-        if (!g) { put_task_struct(t); return -ESRCH; }
-        /* Send SIGSTOP to group leader to ensure a group stop */
-        send_sig(SIGSTOP, g, 1);
-        put_task_struct(g);
+    /* Group-stop the process (affects all threads) */
+    ret = fij_group_stop(ctx->target_tgid);
+    if (ret) {
+        put_task_struct(t);
+        return ret;
     }
 
     /* Wait for the chosen thread to be stopped */
@@ -310,20 +330,12 @@ int fij_stop_flip_resume_one_random(struct fij_ctx *ctx)
     }
 
     /* Resume the whole group */
-    {
-        struct task_struct *g;
-        rcu_read_lock();
-        g = fij_rcu_find_get_task_by_tgid(ctx->target_tgid);
-        if (g) {
-            /* SIGCONT wakes the group */
-            send_sig(SIGCONT, g, 1);
-        }
-        rcu_read_unlock();
-    }
+    fij_group_cont(ctx->target_tgid);
 
     put_task_struct(t);
     return ret;
 }
+
 
 int fij_flip_for_task(struct fij_ctx *ctx, struct task_struct *t)
 {
