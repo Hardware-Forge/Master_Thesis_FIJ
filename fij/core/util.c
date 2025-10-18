@@ -3,28 +3,17 @@
 #include <linux/fs.h>
 #include <linux/sched/signal.h>
 
-pid_t fij_find_pid_by_name(const char *name)
-{
-    struct task_struct *task;
-
-    for_each_process(task) {
-        if (strcmp(task->comm, name) == 0)
-            return task->pid;  /* TGID of leader or any matching? Ok for your use. */
-    }
-    return -1;
-}
-
 struct task_struct *fij_rcu_find_get_task_by_tgid(pid_t tgid)
 {
     struct task_struct *tsk;
 
     rcu_read_lock();
-    tsk = pid_task(find_vpid(tgid), PIDTYPE_TGID);  /* no ref yet */
+    tsk = pid_task(find_vpid(tgid), PIDTYPE_TGID);
     if (tsk)
-        get_task_struct(tsk);                       /* take ref */
+        get_task_struct(tsk);
     rcu_read_unlock();
 
-    return tsk; /* put_task_struct() when done */
+    return tsk;
 }
 
 int fij_va_to_file_off(struct task_struct *t, unsigned long va,

@@ -49,6 +49,11 @@ struct fij_ctx {
     struct completion monitor_done;
     struct completion bitflip_done;
 
+    /* processes */
+    pid_t *targets;   /* array of TGIDs root included */
+    int    ntargets;  /* number of valid entries in targets[] */
+    int    capacity;
+
     struct fij_params parameters;
 };
 
@@ -86,6 +91,8 @@ int  fij_start_bitflip_thread(struct fij_ctx *ctx);
 void fij_stop_bitflip_thread(struct fij_ctx *ctx);
 int fij_flip_for_task(struct fij_ctx *ctx, struct task_struct *t);
 int fij_stop_flip_resume_one_random(struct fij_ctx *ctx);
+int fij_group_stop(pid_t tgid);
+void fij_group_cont(pid_t tgid);
 
 /* ---- uprobes ---- */
 int  fij_uprobe_arm(struct fij_ctx *ctx, unsigned long target_va);
@@ -97,11 +104,15 @@ int  fij_monitor_start(struct fij_ctx *ctx);
 void fij_monitor_stop(struct fij_ctx *ctx);
 int fij_wait_task_stopped(struct task_struct *t, long timeout_jiffies);
 
+/* ---- processes ---- */
+int fij_stop_descendants_top_down(struct fij_ctx *ctx, pid_t root_tgid);
+int fij_restart_descendants_top_down(const struct fij_ctx *ctx);
+
+
 /* ---- exec helper ---- */
 int  fij_exec_and_stop(const char *path, char *const argv[], pid_t *target_tgid);
 
 /* ---- utilities ---- */
-pid_t fij_find_pid_by_name(const char *name);
 int   fij_va_to_file_off(struct task_struct *t, unsigned long va,
                          struct inode **out_inode, loff_t *out_off);
 int   fij_send_cont(pid_t tgid);

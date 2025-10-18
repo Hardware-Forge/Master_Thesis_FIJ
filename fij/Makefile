@@ -6,6 +6,7 @@ fij-objs := \
     fij_main.o \
     iface/chardev.o \
     iface/ioctl.o \
+	core/processes.o \
     core/bitflip.o \
     core/uprobe.o \
     core/monitor.o \
