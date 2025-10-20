@@ -302,6 +302,8 @@ int fij_stop_flip_resume_one_random(struct fij_ctx *ctx)
     int idx = (int)get_random_u32_below(ctx->ntargets);
     pid_t tgid = ctx->targets[idx];
 
+    pr_info("selected process with pid=%d", tgid);
+
     if (READ_ONCE(ctx->parameters.all_threads))
         return fij_stop_flip_resume_all_threads(ctx, tgid);
 
@@ -312,9 +314,11 @@ int fij_stop_flip_resume_one_random(struct fij_ctx *ctx)
     if (!t)
         return -ESRCH;
 
-    if (!ret) 
+    if (!ret) {
+        pr_info("starting injection ...");
         /* Flip only this thread's saved user regs */
         ret = fij_flip_for_task(ctx, t);
+    }
 
     /* Resume all process tree */
     fij_restart_descendants_top_down(ctx);

@@ -56,7 +56,7 @@ int fij_stop_descendants_top_down(struct fij_ctx *ctx, pid_t root_tgid)
     pid_t *buf;
 
     if (!ctx)
-        return -EINVAL;
+        return 1; /* error */
 
     /* Resolve root under RCU, then pin it for later use */
     rcu_read_lock();
@@ -69,7 +69,7 @@ int fij_stop_descendants_top_down(struct fij_ctx *ctx, pid_t root_tgid)
     rcu_read_unlock();
 
     if (!root)
-        return -ESRCH;
+        return 1; /* error */
 
     /* First pass: count descendants (under RCU) */
     rcu_read_lock();
@@ -83,7 +83,7 @@ int fij_stop_descendants_top_down(struct fij_ctx *ctx, pid_t root_tgid)
         buf = kmalloc_array(total, sizeof(*buf), GFP_KERNEL);
         if (!buf) {
             put_task_struct(root);
-            return -ENOMEM;
+            return 1; /* error */
         }
         kfree(ctx->targets);
         ctx->targets  = buf;
@@ -108,8 +108,9 @@ int fij_stop_descendants_top_down(struct fij_ctx *ctx, pid_t root_tgid)
     for (i = 0; i < n; i++)
         fij_group_stop(ctx->targets[i]);
 
-    return n;
+    return 0; /* success */
 }
+
 
 int fij_restart_descendants_top_down(const struct fij_ctx *ctx)
 {
