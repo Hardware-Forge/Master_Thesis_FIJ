@@ -1,5 +1,7 @@
 #include <linux/rcupdate.h>
 #include <linux/pid.h>
+#include <linux/sched.h>
+#include <linux/slab.h>
 
 #include "fij_internal.h"
 
@@ -49,14 +51,15 @@ static int fij_collect_descendants_preorder_rcu(struct task_struct *parent,
     return n;
 }
 
-int fij_stop_descendants_top_down(struct fij_ctx *ctx, pid_t root_tgid)
+/* collect root + descendants into ctx->targets at runtime. */
+int fij_collect_descendants(struct fij_ctx *ctx, pid_t root_tgid)
 {
     struct task_struct *root = NULL;
-    int count = 0, n = 0, total = 0, i;
+    int count = 0, n = 0, total;
     pid_t *buf;
 
     if (!ctx)
-        return 1; /* error */
+        return -EINVAL;
 
     /* Resolve root under RCU, then pin it for later use */
     rcu_read_lock();
@@ -69,7 +72,7 @@ int fij_stop_descendants_top_down(struct fij_ctx *ctx, pid_t root_tgid)
     rcu_read_unlock();
 
     if (!root)
-        return 1; /* error */
+        return -ESRCH;
 
     /* First pass: count descendants (under RCU) */
     rcu_read_lock();
@@ -78,12 +81,12 @@ int fij_stop_descendants_top_down(struct fij_ctx *ctx, pid_t root_tgid)
 
     total = count + 1; /* +1 for root */
 
-    /* Allocate (or grow) outside of RCU */
+    /* Ensure capacity outside of RCU */
     if (ctx->capacity < total) {
         buf = kmalloc_array(total, sizeof(*buf), GFP_KERNEL);
         if (!buf) {
             put_task_struct(root);
-            return 1; /* error */
+            return -ENOMEM;
         }
         kfree(ctx->targets);
         ctx->targets  = buf;
@@ -93,6 +96,7 @@ int fij_stop_descendants_top_down(struct fij_ctx *ctx, pid_t root_tgid)
     /* Second pass: root first, then pre-order descendants (under RCU) */
     rcu_read_lock();
 
+    n = 0;
     ctx->targets[n++] = root->tgid;
 
     n += fij_collect_descendants_preorder_rcu(root,
@@ -104,17 +108,5 @@ int fij_stop_descendants_top_down(struct fij_ctx *ctx, pid_t root_tgid)
 
     ctx->ntargets = n;
 
-    /* Send SIGSTOP outside of RCU (top-down order) */
-    for (i = 0; i < n; i++)
-        fij_group_stop(ctx->targets[i]);
-
     return 0; /* success */
-}
-
-
-int fij_restart_descendants_top_down(const struct fij_ctx *ctx)
-{
-    for (int i = 0; i < ctx->ntargets; i++)
-        fij_group_cont(ctx->targets[i]);
-    return 0;
 }

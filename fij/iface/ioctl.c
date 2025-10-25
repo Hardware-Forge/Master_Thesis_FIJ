@@ -50,8 +50,6 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         if (READ_ONCE(ctx->running))
             return -EBUSY;
 
-        WRITE_ONCE(ctx->running, 1);
-
         argv = kcalloc(FIJ_MAX_ARGC + 2, sizeof(char *), GFP_KERNEL);
         if (!argv) { err = -ENOMEM; goto fail_start; }
 
@@ -75,6 +73,8 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         err = fij_exec_and_stop(path_copy, argv, &ctx->target_tgid);
         if (err)
             goto fail_start;
+
+        WRITE_ONCE(ctx->running, 1);
 
         if (ctx->target_tgid < 0) {
             pr_err("launched '%s' not found\n", ctx->parameters.process_name);

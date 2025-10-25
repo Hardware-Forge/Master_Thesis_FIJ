@@ -11,7 +11,7 @@
 int DEFAULT_MIN_DELAY_MS = 0;
 int DEFAULT_MAX_DELAY_MS = 1000;
 
-int fij_group_stop(pid_t tgid)
+static int fij_group_stop(pid_t tgid)
 {
     struct task_struct *g = NULL;
 
@@ -29,7 +29,7 @@ int fij_group_stop(pid_t tgid)
     return 0;
 }
 
-void fij_group_cont(pid_t tgid)
+static void fij_group_cont(pid_t tgid)
 {
     struct task_struct *g = NULL;
 
@@ -233,6 +233,11 @@ static int fij_stop_flip_resume_all_threads(struct fij_ctx *ctx, pid_t tgid)
     int ret = 0, first_err = 0;
     bool did_mem = false;
 
+    /* Stop the whole group via helper */
+    ret = fij_group_stop(tgid);
+    if (ret)
+        return ret;
+
     /* Reacquire leader with a ref for iteration */
     rcu_read_lock();
     g = fij_rcu_find_get_task_by_tgid(tgid);
@@ -240,7 +245,11 @@ static int fij_stop_flip_resume_all_threads(struct fij_ctx *ctx, pid_t tgid)
         get_task_struct(g);
     rcu_read_unlock();
 
-    /* Iterate all threads in the group */
+    /*
+     * Iterate all threads in the group.
+     * Note: for_each_thread() requires tasklist safety; the group is
+     * stopping and we take a ref while touching each 't'.
+     */
     for_each_thread(g, t) {
         int this_ret;
 
@@ -279,6 +288,8 @@ static int fij_stop_flip_resume_all_threads(struct fij_ctx *ctx, pid_t tgid)
         put_task_struct(t);
     }
 
+    /* Resume the whole group via helper */
+    fij_group_cont(tgid);
     put_task_struct(g);
 
     /*
@@ -294,15 +305,12 @@ int fij_stop_flip_resume_one_random(struct fij_ctx *ctx)
     struct task_struct *t;
     int ret = 0;
 
-    /* Stop all processes in process tree and choose a random process */
-    ret = fij_stop_descendants_top_down(ctx, ctx->target_tgid);
+    /* Collect processes at runtime */
+    ret = fij_collect_descendants(ctx, ctx->target_tgid);
 
-    pr_info("number of processes is %d", ctx->ntargets);
-
+    /* Choose TGID of process to stop */
     int idx = (int)get_random_u32_below(ctx->ntargets);
     pid_t tgid = ctx->targets[idx];
-
-    pr_info("selected process with pid=%d", tgid);
 
     if (READ_ONCE(ctx->parameters.all_threads))
         return fij_stop_flip_resume_all_threads(ctx, tgid);
@@ -314,14 +322,22 @@ int fij_stop_flip_resume_one_random(struct fij_ctx *ctx)
     if (!t)
         return -ESRCH;
 
+    /* Group-stop the process (affects all threads) */
+    ret = fij_group_stop(tgid);
+    if (ret) {
+        put_task_struct(t);
+        return ret;
+    }
+
+    /* Wait for the chosen thread to be stopped */
+    ret = fij_wait_task_stopped(t, msecs_to_jiffies(500));
     if (!ret) {
-        pr_info("starting injection ...");
         /* Flip only this thread's saved user regs */
         ret = fij_flip_for_task(ctx, t);
     }
 
-    /* Resume all process tree */
-    fij_restart_descendants_top_down(ctx);
+    /* Resume the whole group */
+    fij_group_cont(tgid);
 
     put_task_struct(t);
     return ret;

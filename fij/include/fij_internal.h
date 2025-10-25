@@ -105,8 +105,7 @@ void fij_monitor_stop(struct fij_ctx *ctx);
 int fij_wait_task_stopped(struct task_struct *t, long timeout_jiffies);
 
 /* ---- processes ---- */
-int fij_stop_descendants_top_down(struct fij_ctx *ctx, pid_t root_tgid);
-int fij_restart_descendants_top_down(const struct fij_ctx *ctx);
+int fij_collect_descendants(struct fij_ctx *ctx, pid_t root_tgid);
 
 
 /* ---- exec helper ---- */
