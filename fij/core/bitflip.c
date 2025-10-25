@@ -11,7 +11,7 @@
 int DEFAULT_MIN_DELAY_MS = 0;
 int DEFAULT_MAX_DELAY_MS = 1000;
 
-static int fij_group_stop(pid_t tgid)
+int fij_group_stop(pid_t tgid)
 {
     struct task_struct *g = NULL;
 
@@ -29,7 +29,7 @@ static int fij_group_stop(pid_t tgid)
     return 0;
 }
 
-static void fij_group_cont(pid_t tgid)
+void fij_group_cont(pid_t tgid)
 {
     struct task_struct *g = NULL;
 
@@ -109,7 +109,7 @@ out:
 }
 
 
-int fij_flip_register_from_ptregs(struct fij_ctx *ctx, struct pt_regs *regs)
+int fij_flip_register_from_ptregs(struct fij_ctx *ctx, struct pt_regs *regs, pid_t tgid)
 {
     int target_reg = ctx->parameters.target_reg;
     /* if reg is null pick random value */
@@ -134,12 +134,12 @@ int fij_flip_register_from_ptregs(struct fij_ctx *ctx, struct pt_regs *regs)
     WRITE_ONCE(*p, after);
 
     pr_info("FIJ: flipped %s bit %d (LSB=0): 0x%lx -> 0x%lx (TGID %d)\n",
-            fij_reg_name(target_reg), bit, before, after, current->tgid);
+            fij_reg_name(target_reg), bit, before, after, tgid);
 
     return 0;
 }
 
-int fij_perform_mem_bitflip(struct fij_ctx *ctx)
+int fij_perform_mem_bitflip(struct fij_ctx *ctx, pid_t tgid)
 {
     struct task_struct *task = NULL;
     struct mm_struct *mm = NULL;
@@ -150,10 +150,10 @@ int fij_perform_mem_bitflip(struct fij_ctx *ctx)
     int ret = 0;
 
     rcu_read_lock();
-    task = pid_task(find_vpid(READ_ONCE(ctx->target_tgid)), PIDTYPE_TGID);
+    task = pid_task(find_vpid(READ_ONCE(tgid)), PIDTYPE_TGID);
     if (!task) {
         rcu_read_unlock();
-        pr_err("TGID %d not found\n", ctx->target_tgid);
+        pr_err("TGID %d not found\n", tgid);
         return -ESRCH;
     }
     get_task_struct(task);
@@ -161,7 +161,7 @@ int fij_perform_mem_bitflip(struct fij_ctx *ctx)
 
     mm = get_task_mm(task);
     if (!mm) {
-        pr_err("failed to get mm for TGID %d\n", ctx->target_tgid);
+        pr_err("failed to get mm for TGID %d\n", tgid);
         ret = -EINVAL;
         goto out_put_task;
     }
@@ -218,7 +218,7 @@ int fij_perform_mem_bitflip(struct fij_ctx *ctx)
     }
 
     pr_info("bit flipped at 0x%lx (TGID %d): 0x%02x -> 0x%02x\n",
-            target_addr, ctx->target_tgid, orig_byte, flipped_byte);
+            target_addr, tgid, orig_byte, flipped_byte);
 
 out_put_mm:
     if (mm) mmput(mm);
@@ -272,11 +272,11 @@ static int fij_stop_flip_resume_all_threads(struct fij_ctx *ctx, pid_t tgid)
             if (!regs) {
                 this_ret = -EINVAL;
             } else {
-                this_ret = fij_flip_register_from_ptregs(ctx, regs);
+                this_ret = fij_flip_register_from_ptregs(ctx, regs, tgid);
             }
         } else {
             if (!did_mem) {
-                this_ret = fij_perform_mem_bitflip(ctx);
+                this_ret = fij_perform_mem_bitflip(ctx, tgid);
                 did_mem = (this_ret == 0);
             } else {
                 this_ret = 0; /* already did the process-wide mem flip */
@@ -333,7 +333,7 @@ int fij_stop_flip_resume_one_random(struct fij_ctx *ctx)
     ret = fij_wait_task_stopped(t, msecs_to_jiffies(500));
     if (!ret) {
         /* Flip only this thread's saved user regs */
-        ret = fij_flip_for_task(ctx, t);
+        ret = fij_flip_for_task(ctx, t, tgid);
     }
 
     /* Resume the whole group */
@@ -344,17 +344,17 @@ int fij_stop_flip_resume_one_random(struct fij_ctx *ctx)
 }
 
 
-int fij_flip_for_task(struct fij_ctx *ctx, struct task_struct *t)
+int fij_flip_for_task(struct fij_ctx *ctx, struct task_struct *t, pid_t tgid)
 {
     struct pt_regs *regs = task_pt_regs(t);
 
     if (choose_register_target(ctx->parameters.weight_mem, ctx->parameters.only_mem)) {
         if (!regs)
             return -EINVAL;
-        return fij_flip_register_from_ptregs(ctx, regs);
+        return fij_flip_register_from_ptregs(ctx, regs, tgid);
     }
     else {
-        return fij_perform_mem_bitflip(ctx);
+        return fij_perform_mem_bitflip(ctx, tgid);
     }
     
 }
