@@ -33,6 +33,8 @@ struct fij_params {
     int thread_present;
     int thread;
     int all_threads;
+    int nprocess;
+    int process_present;
 };
 
 /* IOCTLs */

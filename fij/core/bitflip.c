@@ -307,9 +307,19 @@ int fij_stop_flip_resume_one_random(struct fij_ctx *ctx)
 
     /* Collect processes at runtime */
     ret = fij_collect_descendants(ctx, ctx->target_tgid);
+    int idx = NULL;
 
-    /* Choose TGID of process to stop */
-    int idx = (int)get_random_u32_below(ctx->ntargets);
+    if (ctx->parameters.process_present) {
+        /* the index of the process was chosen */
+        idx = ctx->parameters.nprocess;
+        if (idx > ctx->ntargets || idx < 0) {
+            idx = (int)get_random_u32_below(ctx->ntargets);
+        }
+    }
+    else {
+        /* Choose TGID of process to stop */
+        idx = (int)get_random_u32_below(ctx->ntargets);
+    }
     pid_t tgid = ctx->targets[idx];
 
     if (READ_ONCE(ctx->parameters.all_threads))

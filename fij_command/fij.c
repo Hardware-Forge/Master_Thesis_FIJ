@@ -54,6 +54,9 @@ static int parse_common_params(int argc, char **argv, int start_idx, struct fij_
             p->thread = atoi(argv[i] + 7);
         } else if (strncmp(argv[i], "all_threads=", 12) == 0) {
                     p->all_threads = (atoi(argv[i] + 12) != 0);
+        } else if (strncmp(argv[i], "nprocess=", 9) == 0) {
+                    p->process_present = 1;
+                    p->nprocess = atoi(argv[i] + 9);
         }
     }
 
@@ -125,6 +128,7 @@ int main(int argc, char *argv[]) {
 	params.target_pc = 0;
     params.reg_bit_present = 0;
     params.thread_present = 0;
+    params.process_present = 0;
 
     // parse common fields (path, args)
     if (parse_common_params(argc, argv, 2, &params) < 0) return 1;
