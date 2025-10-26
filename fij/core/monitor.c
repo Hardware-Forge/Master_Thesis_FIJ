@@ -60,6 +60,11 @@ static int monitor_thread_fn(void *data)
         pr_info("monitor thread stopped before target exited\n");
     }
 
+    if (ctx->parameters.target_pc_present) {
+        pr_info("fij: monitor_thread: target exited ... disarming probe\n");
+        fij_uprobe_disarm_sync(ctx);
+    }
+
     complete(&ctx->monitor_done);
     WRITE_ONCE(ctx->pc_monitor_thread, NULL);
 

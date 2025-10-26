@@ -29,25 +29,43 @@ static void fij_uprobe_post_actions(struct fij_ctx *ctx)
     }
 }
 
+static bool uprobe_filter(struct uprobe_consumer *uc, struct mm_struct *mm)
+{
+    struct fij_ctx *ctx = container_of(uc, struct fij_ctx, uc);
+    pid_t want = READ_ONCE(ctx->target_tgid);
+
+    rcu_read_lock();
+    /* mm->owner is RCU-protected; may be NULL */
+    struct task_struct *owner = rcu_dereference(mm->owner);
+    pid_t have = owner ? task_tgid_vnr(owner) : 0;
+    rcu_read_unlock();
+
+    return have == want;
+}
 /* uprobe hit: called in target context */
 static int uprobe_hit(struct uprobe_consumer *uc, struct pt_regs *regs, u64 *bp_addr)
 {
+    int ret = 0;
+
     pr_info("fij: uprobe_hit: enter pid=%d\n", current->pid);
     struct fij_ctx *ctx = container_of(uc, struct fij_ctx, uc);
 
-    /* Allow any thread inside the TGID */
-    if (current->tgid != READ_ONCE(ctx->target_tgid))
-        return 0;
+    /* Collect processes at runtime */
+    ret = fij_collect_descendants(ctx, ctx->target_tgid);
+
+    /* Choose TGID of process to stop */
+    int idx = (int)get_random_u32_below(ctx->ntargets);
+    pid_t tgid = ctx->targets[idx];
 
     if (READ_ONCE(ctx->parameters.target_reg) != FIJ_REG_NONE) {
         /* flip the selected register bit */
-        (void)fij_flip_register_from_ptregs(ctx, regs);
+        ret = fij_flip_register_from_ptregs(ctx, regs, tgid);
     } else {
         /* flip memory via existing function */
-        (void)fij_perform_mem_bitflip(ctx);
+        ret = fij_perform_mem_bitflip(ctx, tgid);
     }
     fij_uprobe_post_actions(ctx);
-    return 0;
+    return ret;
     
 }
 
@@ -86,7 +104,7 @@ int fij_uprobe_arm(struct fij_ctx *ctx, unsigned long target_va)
 
     ctx->uc.handler = uprobe_hit;
     ctx->uc.ret_handler = NULL;
-    ctx->uc.filter = NULL;
+    ctx->uc.filter = uprobe_filter;
 
     ctx->inj_uprobe = uprobe_register(ctx->inj_inode, ctx->inj_off, 0, &ctx->uc);
     if (IS_ERR(ctx->inj_uprobe)) {
