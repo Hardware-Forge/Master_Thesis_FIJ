@@ -20,20 +20,25 @@ struct fij_params {
     char process_name[256];
     char process_path[256];
     char process_args[256];
-    int  cycles;
     int target_pc;     /* offset from start_code in INT */
     int target_pc_present;
-    int  target_reg;             /* enum fij_reg_id */
-    int  reg_bit;
+    int target_reg;             /* enum fij_reg_id */
+    /* bit to flip in register */
+    int reg_bit;
     int reg_bit_present;
+    /* The formula that decides the probability is 1/(1+mem_wheight) */
     int weight_mem;
+    /* param to inject only in memory */
     int only_mem;
+    /* process duration. min DEFAUTLS to 0, max should be specified by the user but DEFAULTS to 200ms */
     int min_delay_ms;
     int max_delay_ms;
+    /* params for deterministic thread injection */
     int thread_present;
     int thread;
     int all_threads;
-    int nprocess;
+    /* params for deterministic process injection */
+    int nprocess; // order in array is root-lchild-lchildchild1-...-rchild-rchildchild1-...
     int process_present;
 };
 

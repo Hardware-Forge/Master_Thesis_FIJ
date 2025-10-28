@@ -42,7 +42,7 @@ static bool uprobe_filter(struct uprobe_consumer *uc, struct mm_struct *mm)
 
     return have == want;
 }
-/* uprobe hit: called in target context */
+
 static int uprobe_hit(struct uprobe_consumer *uc, struct pt_regs *regs, u64 *bp_addr)
 {
     int ret = 0;
@@ -58,10 +58,10 @@ static int uprobe_hit(struct uprobe_consumer *uc, struct pt_regs *regs, u64 *bp_
     pid_t tgid = ctx->targets[idx];
 
     if (READ_ONCE(ctx->parameters.target_reg) != FIJ_REG_NONE) {
-        /* flip the selected register bit */
+        /* flip the selected register */
         ret = fij_flip_register_from_ptregs(ctx, regs, tgid);
     } else {
-        /* flip memory via existing function */
+        /* flip memory*/
         ret = fij_perform_mem_bitflip(ctx, tgid);
     }
     fij_uprobe_post_actions(ctx);
