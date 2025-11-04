@@ -33,6 +33,10 @@ struct fij_ctx {
     struct task_struct *bitflip_thread;
     struct task_struct *pc_monitor_thread;
 
+    /* bitflip thread control */
+    wait_queue_head_t   flip_wq;          /* thread sleeps here */
+    atomic_t            flip_triggered;   /* 0 = idle, 1 = wake/request */
+
     /* uprobes */
     struct uprobe_consumer uc;
     struct inode       *inj_inode;
@@ -41,6 +45,8 @@ struct fij_ctx {
     bool                uprobe_active;
     atomic_t            uprobe_disarm_queued;
     struct work_struct  uprobe_disarm_work;
+    struct work_struct inject_work;
+    atomic_t inject_work_queued;
 
     /* device */
     struct miscdevice   miscdev;

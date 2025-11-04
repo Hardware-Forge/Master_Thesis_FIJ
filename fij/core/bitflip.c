@@ -7,6 +7,7 @@
 #include <linux/hrtimer.h>
 #include <linux/uaccess.h>
 #include <linux/delay.h>
+#include <linux/freezer.h>
 
 int DEFAULT_MIN_DELAY_MS = 0;
 int DEFAULT_MAX_DELAY_MS = 1000;
@@ -79,28 +80,54 @@ int bitflip_thread_fn(void *data)
     int delay_ms, ret;
 
     init_completion(&ctx->bitflip_done);
+    set_freezable();
 
-    /* Sleep a random time before injecting */
-    delay_ms = fij_random_ms(min_ms, max_ms);
-    if (delay_ms >= 0) {
-        if (delay_ms > 1 && max_ms > 1) {
-            /* millisecond path (unchanged) */
-            if (msleep_interruptible(delay_ms))
-                goto out;  /* woke by signal/stop */
-        } else {
-            delay_ms = fij_random_ms(0, 1000);
-            /* sub-ms path via hrtimer */
-            ret = fij_sleep_hrtimeout_interruptible(delay_ms); /* ms -> us */
-            if (ret)      /* interrupted by signal or stop */
-                goto out;
+    if (READ_ONCE(ctx->parameters.target_pc_present)) {
+        /* Deterministic mode: sleep until uprobe triggers us */
+        pr_info("fij: bitflip_thread: waiting for uprobe trigger\n");
+
+        /* Wait until flip_triggered is set, or thread stop requested */
+        wait_event_killable(ctx->flip_wq,
+                            atomic_read(&ctx->flip_triggered) || kthread_should_stop());
+
+        if (kthread_should_stop())
+            goto out;
+
+        /* If target died, abort */
+        if (!READ_ONCE(ctx->target_alive)) {
+            pr_info("fij: bitflip_thread: target not alive, abort\n");
+            goto out;
         }
+
+        /* perform the single injection */
+        ret = fij_stop_flip_resume_one_random(ctx);
+        if (ret == -ESRCH)
+            pr_info("FIJ: target TGID %d gone; aborting bitflip\n", ctx->target_tgid);
+
+        /* Clear trigger (not strictly required since thread exits) */
+        atomic_set(&ctx->flip_triggered, 0);
+
+    } else {
+        /* Nondeterministic mode: sleep a random interval then inject (original behavior) */
+        delay_ms = fij_random_ms(min_ms, max_ms);
+        if (delay_ms >= 0) {
+            if (delay_ms > 1 && max_ms > 1) {
+                if (msleep_interruptible(delay_ms))
+                    goto out;  /* interrupted by signal/stop */
+            } else {
+                delay_ms = fij_random_ms(0, 1000);
+                ret = fij_sleep_hrtimeout_interruptible(delay_ms); /* ms -> us */
+                if (ret)      /* interrupted by signal or stop */
+                    goto out;
+            }
+        }
+
+        if (!READ_ONCE(ctx->target_alive) || kthread_should_stop())
+            goto out;
+
+        if (fij_stop_flip_resume_one_random(ctx) == -ESRCH)
+            pr_info("FIJ: target TGID %d gone; aborting bitflip\n", ctx->target_tgid);
     }
-
-    if (!READ_ONCE(ctx->target_alive) || kthread_should_stop())
-        goto out;
-
-    if (fij_stop_flip_resume_one_random(ctx) == -ESRCH)
-        pr_info("FIJ: target TGID %d gone; aborting bitflip\n", ctx->target_tgid);
 
 out:
     complete(&ctx->bitflip_done);
@@ -114,7 +141,7 @@ int fij_flip_register_from_ptregs(struct fij_ctx *ctx, struct pt_regs *regs, pid
     int target_reg = ctx->parameters.target_reg;
     /* if reg is null pick random value */
     if (!ctx->parameters.target_reg)
-    target_reg = fij_pick_random_reg_any();
+        target_reg = fij_pick_random_reg_any();
     /* if bit is null pick a random value */
     int bit = ctx->parameters.reg_bit_present ? ctx->parameters.reg_bit : fij_pick_random_bit64();
     unsigned long *p = fij_reg_ptr_from_ptregs(regs, target_reg);
@@ -266,8 +293,8 @@ static int fij_stop_flip_resume_all_threads(struct fij_ctx *ctx, pid_t tgid)
             continue;
         }
 
-        /* Perform the flip (unchanged logic) */
-        if (choose_register_target(ctx->parameters.weight_mem, ctx->parameters.only_mem)) {
+        /* Perform the flip */
+        if (choose_register_target(ctx->parameters.weight_mem, ctx->parameters.only_mem) || ctx->parameters.target_reg != FIJ_REG_NONE) {
             struct pt_regs *regs = task_pt_regs(t);
             if (!regs) {
                 this_ret = -EINVAL;
@@ -331,7 +358,6 @@ int fij_stop_flip_resume_one_random(struct fij_ctx *ctx)
         t = fij_pick_random_user_thread(tgid);
     if (!t)
         return -ESRCH;
-
     /* Group-stop the process (affects all threads) */
     ret = fij_group_stop(tgid);
     if (ret) {
@@ -358,7 +384,7 @@ int fij_flip_for_task(struct fij_ctx *ctx, struct task_struct *t, pid_t tgid)
 {
     struct pt_regs *regs = task_pt_regs(t);
 
-    if (choose_register_target(ctx->parameters.weight_mem, ctx->parameters.only_mem)) {
+    if (choose_register_target(ctx->parameters.weight_mem, ctx->parameters.only_mem) || ctx->parameters.target_reg != FIJ_REG_NONE) {
         if (!regs)
             return -EINVAL;
         return fij_flip_register_from_ptregs(ctx, regs, tgid);

@@ -87,7 +87,6 @@ static void fij_params_apply_defaults(struct fij_params *p)
 
     /* Weights / counters */
     if (p->weight_mem < 0) p->weight_mem = 0;          /* clamp negatives */
-    if (p->cycles < 0)     p->cycles     = 0;          /* 0 == infinite */
 
     /* Register targeting */
     if (p->target_reg == 0) p->target_reg = FIJ_REG_NONE;
@@ -123,7 +122,6 @@ int main(int argc, char *argv[]) {
 
     if (argc >= 2 && strcmp(argv[1], "exec") == 0) {
 	struct fij_params params = {0};
-	params.cycles = 0;  // default to infinite
     params.target_pc_present = 0;
 	params.target_pc = 0;
     params.reg_bit_present = 0;
@@ -163,17 +161,16 @@ int main(int argc, char *argv[]) {
             return 1;
         }
 
-        printf("Executed '%s' with args '%s' and injected faults (%s cycles)\n",
+        printf("Executed '%s' with args '%s' and injected faults\n",
                params.process_path,
-               params.process_args[0] ? params.process_args : "(none)",
-               params.cycles == 0 ? "infinite" : argv[3]);
+               params.process_args[0] ? params.process_args : "(none)");
     }
     else {
         fprintf(stderr, "Usage:\n");
-        fprintf(stderr, "%s start process=NAME [cycles=N]\n", argv[0]);
+        fprintf(stderr, "%s start process=NAME\n", argv[0]);
         fprintf(stderr, "  %s stop\n", argv[0]);
         fprintf(stderr, "  %s status\n", argv[0]);
-        fprintf(stderr, "  %s exec path=PATH [args=\"ARG1 ARG2\"] [cycles=N]\n", argv[0]);	
+        fprintf(stderr, "  %s exec path=PATH [args=\"ARG1 ARG2\"] \n", argv[0]);	
         return 1;
     }
 

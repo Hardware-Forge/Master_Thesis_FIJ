@@ -29,6 +29,19 @@ static void fij_uprobe_post_actions(struct fij_ctx *ctx)
     }
 }
 
+static void inject_workfn(struct work_struct *work)
+{
+    struct fij_ctx *ctx = container_of(work, struct fij_ctx, inject_work);
+
+    fij_stop_flip_resume_one_random(ctx);
+
+    /* One-shot: disarm after the injection completes */
+    fij_uprobe_schedule_disarm(ctx);
+
+    /* Allow future queueing */
+    atomic_set(&ctx->inject_work_queued, 0);
+}
+
 static bool uprobe_filter(struct uprobe_consumer *uc, struct mm_struct *mm)
 {
     struct fij_ctx *ctx = container_of(uc, struct fij_ctx, uc);
@@ -43,30 +56,58 @@ static bool uprobe_filter(struct uprobe_consumer *uc, struct mm_struct *mm)
     return have == want;
 }
 
+// static int uprobe_hit(struct uprobe_consumer *uc, struct pt_regs *regs, u64 *bp_addr)
+// {
+//     int ret = 0;
+
+//     pr_info("fij: uprobe_hit: enter pid=%d\n", current->pid);
+//     struct fij_ctx *ctx = container_of(uc, struct fij_ctx, uc);
+
+//     // /* Collect processes at runtime */
+//     // ret = fij_collect_descendants(ctx, ctx->target_tgid);
+
+//     // /* Choose TGID of process to stop */
+//     // int idx = (int)get_random_u32_below(ctx->ntargets);
+//     // pid_t tgid = ctx->targets[idx];
+
+//     fij_stop_flip_resume_one_random(ctx);
+//     // if (READ_ONCE(ctx->parameters.target_reg) != FIJ_REG_NONE) {
+//     //     /* flip the selected register */
+//     //     ret = fij_flip_register_from_ptregs(ctx, regs, tgid);
+//     // } else {
+//     //     /* flip memory*/
+//     //     ret = fij_perform_mem_bitflip(ctx, tgid);
+//     // }
+//     fij_uprobe_post_actions(ctx);
+//     return ret;
+    
+// }
+
+// static int uprobe_hit(struct uprobe_consumer *uc, struct pt_regs *regs, u64 *bp_addr)
+// {
+//     struct fij_ctx *ctx = container_of(uc, struct fij_ctx, uc);
+
+//     pr_info("fij: uprobe_hit: pid=%d\n", current->pid);
+//     queue_work(system_unbound_wq, &ctx->inject_work);  // do the real work elsewhere
+//     fij_uprobe_post_actions(ctx);  // or move disarm into that worker after injection
+//     return 0;
+// }
+
 static int uprobe_hit(struct uprobe_consumer *uc, struct pt_regs *regs, u64 *bp_addr)
 {
-    int ret = 0;
-
-    pr_info("fij: uprobe_hit: enter pid=%d\n", current->pid);
     struct fij_ctx *ctx = container_of(uc, struct fij_ctx, uc);
 
-    /* Collect processes at runtime */
-    ret = fij_collect_descendants(ctx, ctx->target_tgid);
+    /* Extremely small and fast in probe context */
+    pr_info("fij: uprobe_hit: pid=%d\n", current->pid);
 
-    /* Choose TGID of process to stop */
-    int idx = (int)get_random_u32_below(ctx->ntargets);
-    pid_t tgid = ctx->targets[idx];
+    /* set trigger and wake the bitflip thread (if not already triggered) */
+    if (atomic_xchg(&ctx->flip_triggered, 1) == 0)
+        wake_up(&ctx->flip_wq);
 
-    if (READ_ONCE(ctx->parameters.target_reg) != FIJ_REG_NONE) {
-        /* flip the selected register */
-        ret = fij_flip_register_from_ptregs(ctx, regs, tgid);
-    } else {
-        /* flip memory*/
-        ret = fij_perform_mem_bitflip(ctx, tgid);
-    }
+    /* schedule disarm if previously used behavior wanted it (one-shot uprobe) */
     fij_uprobe_post_actions(ctx);
-    return ret;
-    
+
+    return 0;
 }
 
 
@@ -155,4 +196,7 @@ void __init_or_module fij_uprobe_init_work(struct fij_ctx *ctx)
 {
     INIT_WORK(&ctx->uprobe_disarm_work, uprobe_disarm_workfn);
     atomic_set(&ctx->uprobe_disarm_queued, 0);
+
+    INIT_WORK(&ctx->inject_work, inject_workfn);
+    atomic_set(&ctx->inject_work_queued, 0);
 }

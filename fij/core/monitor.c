@@ -115,14 +115,19 @@ int fij_monitor_start(struct fij_ctx *ctx)
 
     /* monitor thread decides the injection method (DET vs NON-DET) */
 
+    init_waitqueue_head(&ctx->flip_wq);
+    atomic_set(&ctx->flip_triggered, 0);
+
+    /* bitflip thread is started */
+    err = fij_start_bitflip_thread(ctx);
+
+    if (err)
+        return err;
+
     /* Arm uprobe if target_pc != NULL */
     if (ctx->parameters.target_pc_present) {
         /* probe is inserted at specified PC to start injection deterministically */
         err = fij_uprobe_arm(ctx, ctx->target_pc);
-    }
-    else {
-        /* thread injects bitflip at random time is started */
-        err = fij_start_bitflip_thread(ctx);
     }
 
     return err;
