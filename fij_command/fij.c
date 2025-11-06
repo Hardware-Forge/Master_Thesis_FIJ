@@ -57,6 +57,8 @@ static int parse_common_params(int argc, char **argv, int start_idx, struct fij_
         } else if (strncmp(argv[i], "nprocess=", 9) == 0) {
                     p->process_present = 1;
                     p->nprocess = atoi(argv[i] + 9);
+        } else if (strncmp(argv[i], "no_injection=", 13) == 0) {
+                    p->no_injection = (atoi(argv[i] + 13) != 0);
         }
     }
 
@@ -127,6 +129,7 @@ int main(int argc, char *argv[]) {
     params.reg_bit_present = 0;
     params.thread_present = 0;
     params.process_present = 0;
+    params.no_injection = 0;
 
     // parse common fields (path, args)
     if (parse_common_params(argc, argv, 2, &params) < 0) return 1;

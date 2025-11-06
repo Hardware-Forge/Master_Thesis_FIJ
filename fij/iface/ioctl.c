@@ -122,6 +122,11 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         if (err)
             goto fail_start;
 
+        if (wait_for_completion_interruptible(&ctx->monitor_done)) {
+            err = -ERESTARTSYS;
+            goto fail_start;
+        }
+
 fail_start:
         /* best-effort cleanup / state reset */
         kfree(argv);

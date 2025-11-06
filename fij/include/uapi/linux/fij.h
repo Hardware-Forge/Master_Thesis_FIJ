@@ -40,6 +40,7 @@ struct fij_params {
     /* params for deterministic process injection */
     int nprocess; // order in array is root-lchild-lchildchild1-...-rchild-rchildchild1-...
     int process_present;
+    int no_injection; // no injection is performed
 };
 
 /* IOCTLs */
