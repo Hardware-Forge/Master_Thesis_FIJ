@@ -41,6 +41,19 @@ void fij_group_cont(pid_t tgid)
     rcu_read_unlock();
 }
 
+static int fij_sleep_hrtimeout_interruptible_ns(u64 delay_ns)
+{
+    ktime_t kt;
+
+    if (!delay_ns)
+        return 0;
+
+    kt = ktime_set(0, delay_ns);
+
+    set_current_state(TASK_INTERRUPTIBLE);
+    return schedule_hrtimeout(&kt, HRTIMER_MODE_REL);
+}
+
 /* Helper: random ms in [min,max] (inclusive) */
 int fij_random_ms(int min_ms, int max_ms)
 {
@@ -108,17 +121,42 @@ int bitflip_thread_fn(void *data)
         atomic_set(&ctx->flip_triggered, 0);
 
     } else {
-        /* Nondeterministic mode: sleep a random interval then inject (original behavior) */
-        delay_ms = fij_random_ms(min_ms, max_ms);
-        if (delay_ms >= 0) {
-            if (delay_ms > 1 && max_ms > 1) {
-                if (msleep_interruptible(delay_ms))
-                    goto out;  /* interrupted by signal/stop */
-            } else {
-                delay_ms = fij_random_ms(0, 1000);
-                ret = fij_sleep_hrtimeout_interruptible(delay_ms); /* ms -> us */
-                if (ret)      /* interrupted by signal or stop */
+        /* Nondeterministic mode: sleep a random interval then inject */
+
+        /* Normalize bounds */
+        if (max_ms < min_ms) {
+            int tmp = min_ms;
+            min_ms = max_ms;
+            max_ms = tmp;
+        }
+
+        if (max_ms <= 0) {
+            delay_ms = 0;
+        } else if (max_ms < 500) {
+            /*
+             * For short windows (< 500 ms), use high-resolution sleep.
+             * min/max are in ms; we pick a random delay in [min_ms, max_ms] ms
+             * and convert it to ns for schedule_hrtimeout.
+             *
+             * Example: max_ms = 350
+             *  -> delay_ms in [0, 350]
+             *  -> delay_ns in [0, 350 * 1_000_000] ns
+             */
+            delay_ms = fij_random_ms(min_ms, max_ms);
+            if (delay_ms > 0) {
+                u64 delay_ns = (u64)delay_ms * 1000000ULL; /* ms -> ns */
+                ret = fij_sleep_hrtimeout_interruptible_ns(delay_ns);
+                if (ret) /* interrupted by signal / kthread_stop */
                     goto out;
+            }
+        } else {
+            /*
+             * For longer windows (>= 500 ms), msleep is sufficient and cheaper.
+             */
+            delay_ms = fij_random_ms(min_ms, max_ms);
+            if (delay_ms > 0) {
+                if (msleep_interruptible(delay_ms))
+                    goto out;  /* interrupted */
             }
         }
 
@@ -331,10 +369,17 @@ int fij_stop_flip_resume_one_random(struct fij_ctx *ctx)
 {
     struct task_struct *t;
     int ret = 0;
+    int idx;
 
     /* Collect processes at runtime */
     ret = fij_collect_descendants(ctx, ctx->target_tgid);
-    int idx = NULL;
+
+    if (ret)
+        return ret;
+
+    /* No targets -> nothing to flip */
+    if (ctx->ntargets <= 0)
+        return -ESRCH;
 
     if (ctx->parameters.process_present) {
         /* the index of the process was chosen */
@@ -366,7 +411,7 @@ int fij_stop_flip_resume_one_random(struct fij_ctx *ctx)
     }
 
     /* Wait for the chosen thread to be stopped */
-    ret = fij_wait_task_stopped(t, msecs_to_jiffies(500));
+    ret = fij_wait_task_stopped(t, msecs_to_jiffies(100));
     if (!ret) {
         /* Flip only this thread's saved user regs */
         ret = fij_flip_for_task(ctx, t, tgid);

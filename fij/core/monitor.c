@@ -39,7 +39,7 @@ static int monitor_thread_fn(void *data)
 
         wait_event_killable_timeout(fij_mon_wq,
             kthread_should_stop() || READ_ONCE(leader->exit_state),
-            msecs_to_jiffies(200));
+            msecs_to_jiffies(1));
         try_to_freeze();
     }
 
@@ -112,6 +112,10 @@ int fij_monitor_start(struct fij_ctx *ctx)
         kfree(ma);
         return err;
     }
+
+    /* if no_injection == 1, we only monitor; never arm injection */
+    if (ctx->parameters.no_injection)
+        return 0;
 
     /* monitor thread decides the injection method (DET vs NON-DET) */
 
