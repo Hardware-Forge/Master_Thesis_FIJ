@@ -1,0 +1,30 @@
+{
+  "defaults": {
+    "runs": 10,
+    "weight_mem": 5
+  },
+  "targets": [
+    {
+      "path": "Full_pathname",
+
+      "defaults": {
+        "runs": 3,
+        "weight_mem": 5
+      },
+
+      "args": [
+        {
+          "value": "2 2 2"
+        }
+      ]
+    },
+    {
+      "path": "Full_pathname",
+
+      "defaults": {
+        "runs": 15,
+        "weight_mem": 5
+      }
+    }
+  ]
+}
