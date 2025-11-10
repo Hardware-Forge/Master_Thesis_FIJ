@@ -60,7 +60,7 @@ struct fij_ctx {
     int    ntargets;  /* number of valid entries in targets[] */
     int    capacity;
 
-    struct fij_params parameters;
+    struct fij_exec exec;
 };
 
 static const char *fij_reg_name(int id)

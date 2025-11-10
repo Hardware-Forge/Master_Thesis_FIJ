@@ -5,7 +5,7 @@
   },
   "targets": [
     {
-      "path": "Full_pathname",
+      "path": "/home/andrea/Desktop/test/processes",
 
       "defaults": {
         "runs": 3,
@@ -17,14 +17,6 @@
           "value": "2 2 2"
         }
       ]
-    },
-    {
-      "path": "Full_pathname",
-
-      "defaults": {
-        "runs": 15,
-        "weight_mem": 5
-      }
     }
   ]
 }

@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 
 from json_reader import load_fij_jobs_from_file
-from fij_recursive import run_injection_campaign
+from fij_runner import run_injection_campaign
 
 
 def run_campaigns_from_config(

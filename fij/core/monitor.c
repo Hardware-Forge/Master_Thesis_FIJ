@@ -60,7 +60,7 @@ static int monitor_thread_fn(void *data)
         pr_info("monitor thread stopped before target exited\n");
     }
 
-    if (ctx->parameters.target_pc_present) {
+    if (ctx->exec.params.target_pc_present) {
         pr_info("fij: monitor_thread: target exited ... disarming probe\n");
         fij_uprobe_disarm_sync(ctx);
     }
@@ -114,7 +114,7 @@ int fij_monitor_start(struct fij_ctx *ctx)
     }
 
     /* if no_injection == 1, we only monitor; never arm injection */
-    if (ctx->parameters.no_injection)
+    if (ctx->exec.params.no_injection)
         return 0;
 
     /* monitor thread decides the injection method (DET vs NON-DET) */
@@ -129,7 +129,7 @@ int fij_monitor_start(struct fij_ctx *ctx)
         return err;
 
     /* Arm uprobe if target_pc != NULL */
-    if (ctx->parameters.target_pc_present) {
+    if (ctx->exec.params.target_pc_present) {
         /* probe is inserted at specified PC to start injection deterministically */
         err = fij_uprobe_arm(ctx, ctx->target_pc);
     }

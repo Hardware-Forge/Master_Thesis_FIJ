@@ -43,8 +43,21 @@ struct fij_params {
     int no_injection; // no injection is performed
 };
 
+struct fij_result {
+    __s32 status;         // 0 or -ERR from injection
+    __s32 target_tgid;
+    __s32 fault_injected; // 1/0
+    __u64 duration_ns;    // or whatever metrics
+    __u64 seq_no;         // optional: campaign counter
+};
+
+struct fij_exec {
+    struct fij_params params;  // [in]  from userspace
+    struct fij_result result;  // [out] to userspace
+};
+
 /* IOCTLs */
 #define IOCTL_START_FAULT     _IOW('f', 1, struct fij_params)
-#define IOCTL_EXEC_AND_FAULT  _IOW('f', 2, struct fij_params)
+#define IOCTL_EXEC_AND_FAULT  _IOWR('f', 2, struct fij_exec)
 
 #endif /* _UAPI_LINUX_FIJ_H */

@@ -4,7 +4,7 @@ import json
 import ctypes
 from dataclasses import dataclass
 from typing import List, Dict, Any
-from fij_recursive import FijParams
+from structs import FijParams
 
 # ---- FIJ register IDs (must match enum fij_reg_id in fij.h) ----
 FIJ_REG_NONE = 0

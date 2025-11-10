@@ -86,16 +86,17 @@ int fij_sleep_hrtimeout_interruptible(unsigned int delay_us)
 int bitflip_thread_fn(void *data)
 {
     struct fij_ctx *ctx = data;
-    int min = READ_ONCE(ctx->parameters.min_delay_ms);
-    int max = READ_ONCE(ctx->parameters.max_delay_ms);
+    int min = READ_ONCE(ctx->exec.params.min_delay_ms);
+    int max = READ_ONCE(ctx->exec.params.max_delay_ms);
     int min_ms = (min > 0) ? min : DEFAULT_MIN_DELAY_MS;
     int max_ms = max ? max : DEFAULT_MAX_DELAY_MS;
     int delay_ms, ret;
+    u64 duration_ns = 0;
 
     init_completion(&ctx->bitflip_done);
     set_freezable();
 
-    if (READ_ONCE(ctx->parameters.target_pc_present)) {
+    if (READ_ONCE(ctx->exec.params.target_pc_present)) {
         /* Deterministic mode: sleep until uprobe triggers us */
         pr_info("fij: bitflip_thread: waiting for uprobe trigger\n");
 
@@ -144,8 +145,8 @@ int bitflip_thread_fn(void *data)
              */
             delay_ms = fij_random_ms(min_ms, max_ms);
             if (delay_ms > 0) {
-                u64 delay_ns = (u64)delay_ms * 1000000ULL; /* ms -> ns */
-                ret = fij_sleep_hrtimeout_interruptible_ns(delay_ns);
+                duration_ns = (u64)delay_ms * NSEC_PER_MSEC;
+                ret = fij_sleep_hrtimeout_interruptible_ns(duration_ns);
                 if (ret) /* interrupted by signal / kthread_stop */
                     goto out;
             }
@@ -154,6 +155,7 @@ int bitflip_thread_fn(void *data)
              * For longer windows (>= 500 ms), msleep is sufficient and cheaper.
              */
             delay_ms = fij_random_ms(min_ms, max_ms);
+            duration_ns = (u64)delay_ms * NSEC_PER_MSEC;
             if (delay_ms > 0) {
                 if (msleep_interruptible(delay_ms))
                     goto out;  /* interrupted */
@@ -168,6 +170,7 @@ int bitflip_thread_fn(void *data)
     }
 
 out:
+    WRITE_ONCE(ctx->exec.result.duration_ns, duration_ns);
     complete(&ctx->bitflip_done);
     WRITE_ONCE(ctx->bitflip_thread, NULL);
     return 0;
@@ -176,12 +179,12 @@ out:
 
 int fij_flip_register_from_ptregs(struct fij_ctx *ctx, struct pt_regs *regs, pid_t tgid)
 {
-    int target_reg = ctx->parameters.target_reg;
+    int target_reg = ctx->exec.params.target_reg;
     /* if reg is null pick random value */
-    if (!ctx->parameters.target_reg)
+    if (!ctx->exec.params.target_reg)
         target_reg = fij_pick_random_reg_any();
     /* if bit is null pick a random value */
-    int bit = ctx->parameters.reg_bit_present ? ctx->parameters.reg_bit : fij_pick_random_bit64();
+    int bit = ctx->exec.params.reg_bit_present ? ctx->exec.params.reg_bit : fij_pick_random_bit64();
     unsigned long *p = fij_reg_ptr_from_ptregs(regs, target_reg);
 
     if (!p) {
@@ -332,7 +335,7 @@ static int fij_stop_flip_resume_all_threads(struct fij_ctx *ctx, pid_t tgid)
         }
 
         /* Perform the flip */
-        if (choose_register_target(ctx->parameters.weight_mem, ctx->parameters.only_mem) || ctx->parameters.target_reg != FIJ_REG_NONE) {
+        if (choose_register_target(ctx->exec.params.weight_mem, ctx->exec.params.only_mem) || ctx->exec.params.target_reg != FIJ_REG_NONE) {
             struct pt_regs *regs = task_pt_regs(t);
             if (!regs) {
                 this_ret = -EINVAL;
@@ -381,9 +384,9 @@ int fij_stop_flip_resume_one_random(struct fij_ctx *ctx)
     if (ctx->ntargets <= 0)
         return -ESRCH;
 
-    if (ctx->parameters.process_present) {
+    if (ctx->exec.params.process_present) {
         /* the index of the process was chosen */
-        idx = ctx->parameters.nprocess;
+        idx = ctx->exec.params.nprocess;
         if (idx > ctx->ntargets || idx < 0) {
             idx = (int)get_random_u32_below(ctx->ntargets);
         }
@@ -394,11 +397,11 @@ int fij_stop_flip_resume_one_random(struct fij_ctx *ctx)
     }
     pid_t tgid = ctx->targets[idx];
 
-    if (READ_ONCE(ctx->parameters.all_threads))
+    if (READ_ONCE(ctx->exec.params.all_threads))
         return fij_stop_flip_resume_all_threads(ctx, tgid);
 
-    if (ctx->parameters.thread_present)
-        t = fij_pick_user_thread_by_index(tgid, ctx->parameters.thread);
+    if (ctx->exec.params.thread_present)
+        t = fij_pick_user_thread_by_index(tgid, ctx->exec.params.thread);
     else
         t = fij_pick_random_user_thread(tgid);
     if (!t)
@@ -429,7 +432,7 @@ int fij_flip_for_task(struct fij_ctx *ctx, struct task_struct *t, pid_t tgid)
 {
     struct pt_regs *regs = task_pt_regs(t);
 
-    if (choose_register_target(ctx->parameters.weight_mem, ctx->parameters.only_mem) || ctx->parameters.target_reg != FIJ_REG_NONE) {
+    if (choose_register_target(ctx->exec.params.weight_mem, ctx->exec.params.only_mem) || ctx->exec.params.target_reg != FIJ_REG_NONE) {
         if (!regs)
             return -EINVAL;
         return fij_flip_register_from_ptregs(ctx, regs, tgid);

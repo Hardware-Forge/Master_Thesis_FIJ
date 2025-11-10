@@ -44,8 +44,11 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         char *path_copy = NULL, *args_copy = NULL, *cursor = NULL;
         int argc = 0, err = 0;
 
-        if (copy_from_user(&ctx->parameters, (void __user *)arg, sizeof(ctx->parameters)))
-            return -EFAULT;
+        struct fij_exec u;
+        if (copy_from_user(&u, (void __user *)arg, sizeof(u.params)))
+        return -EFAULT;
+
+        ctx->exec.params = u.params;
 
         if (READ_ONCE(ctx->running))
             return -EBUSY;
@@ -53,12 +56,12 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         argv = kcalloc(FIJ_MAX_ARGC + 2, sizeof(char *), GFP_KERNEL);
         if (!argv) { err = -ENOMEM; goto fail_start; }
 
-        path_copy = kstrdup(ctx->parameters.process_path, GFP_KERNEL);
+        path_copy = kstrdup(ctx->exec.params.process_path, GFP_KERNEL);
         if (!path_copy) { err = -ENOMEM; goto fail_start; }
         argv[argc++] = path_copy;
 
-        if (ctx->parameters.process_args[0]) {
-            args_copy = kstrdup(ctx->parameters.process_args, GFP_KERNEL);
+        if (ctx->exec.params.process_args[0]) {
+            args_copy = kstrdup(ctx->exec.params.process_args, GFP_KERNEL);
             if (!args_copy) { err = -ENOMEM; goto fail_start; }
 
             cursor = args_copy;
@@ -77,18 +80,18 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         WRITE_ONCE(ctx->running, 1);
 
         if (ctx->target_tgid < 0) {
-            pr_err("launched '%s' not found\n", ctx->parameters.process_name);
+            pr_err("launched '%s' not found\n", ctx->exec.params.process_name);
             err = -ESRCH;
             goto fail_start;
         }
-        pr_info("launched '%s' (TGID %d)\n", ctx->parameters.process_name, ctx->target_tgid);
+        pr_info("launched '%s' (TGID %d)\n", ctx->exec.params.process_name, ctx->target_tgid);
 
         WRITE_ONCE(ctx->target_alive, true);
 
         /* if PC delay is specified initialize parameter */
-        if (ctx->parameters.target_pc_present) {
+        if (ctx->exec.params.target_pc_present) {
             /* Compute absolute VA */
-            if (ctx->parameters.target_pc) {
+            if (ctx->exec.params.target_pc) {
                 struct pid *p_tmp = find_get_pid(ctx->target_tgid);
                 struct task_struct *t = p_tmp ? pid_task(p_tmp, PIDTYPE_TGID) : NULL;
                 struct mm_struct *m = t ? get_task_mm(t) : NULL;
@@ -100,7 +103,7 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
                     goto fail_start;
                 }
 
-                ctx->target_pc = m->start_code + ctx->parameters.target_pc;
+                ctx->target_pc = m->start_code + ctx->exec.params.target_pc;
                 mmput(m);
                 put_pid(p_tmp);
                 
@@ -126,6 +129,9 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
             err = -ERESTARTSYS;
             goto fail_start;
         }
+
+        if (copy_to_user((void __user *)arg, &u, sizeof(u)))
+            return -EFAULT;
 
 fail_start:
         /* best-effort cleanup / state reset */
