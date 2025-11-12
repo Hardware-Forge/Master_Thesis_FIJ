@@ -143,9 +143,9 @@ int bitflip_thread_fn(void *data)
              *  -> delay_ms in [0, 350]
              *  -> delay_ns in [0, 350 * 1_000_000] ns
              */
-            delay_ms = fij_random_ms(min_ms, max_ms);
+            delay_ms = fij_random_ms(min_ms, max_ms * NSEC_PER_MSEC);
             if (delay_ms > 0) {
-                duration_ns = (u64)delay_ms * NSEC_PER_MSEC;
+                duration_ns = (u64)delay_ms;
                 ret = fij_sleep_hrtimeout_interruptible_ns(duration_ns);
                 if (ret) /* interrupted by signal / kthread_stop */
                     goto out;
@@ -396,6 +396,7 @@ int fij_stop_flip_resume_one_random(struct fij_ctx *ctx)
         idx = (int)get_random_u32_below(ctx->ntargets);
     }
     pid_t tgid = ctx->targets[idx];
+    WRITE_ONCE(ctx->exec.result.target_tgid, tgid);
 
     if (READ_ONCE(ctx->exec.params.all_threads))
         return fij_stop_flip_resume_all_threads(ctx, tgid);
@@ -418,6 +419,10 @@ int fij_stop_flip_resume_one_random(struct fij_ctx *ctx)
     if (!ret) {
         /* Flip only this thread's saved user regs */
         ret = fij_flip_for_task(ctx, t, tgid);
+    }
+
+    if (ret == 0) {
+        WRITE_ONCE(ctx->exec.result.fault_injected, 1);
     }
 
     /* Resume the whole group */
