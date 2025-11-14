@@ -128,4 +128,7 @@ int fij_pick_random_bit64(void);
 enum fij_reg_id fij_pick_random_reg_any(void);
 bool choose_register_target(int weight_mem, int only_mem);
 
+/* --- file tracking --- */
+void fij_capture_output_files(struct fij_ctx *ctx);
+
 #endif /* _LINUX_FIJ_INTERNAL_H */

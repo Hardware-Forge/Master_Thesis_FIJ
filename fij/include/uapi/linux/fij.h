@@ -44,11 +44,11 @@ struct fij_params {
 };
 
 struct fij_result {
-    __s32 status;         // 0 or -ERR from injection
+    __s32 exit_code;
     __s32 target_tgid;
     __s32 fault_injected; // 1/0
-    __u64 duration_ns;    // or whatever metrics
-    __u64 seq_no;         // optional: campaign counter
+    __u64 duration_ns;
+    __u64 seq_no;
 };
 
 struct fij_exec {

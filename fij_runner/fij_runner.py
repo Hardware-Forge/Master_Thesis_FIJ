@@ -4,7 +4,11 @@ import os
 import sys
 import time
 from typing import Dict, List, Tuple
+from pathlib import Path
+import re
 
+from fij_logger import log_injection_iteration
+from dir_utils import create_dir_in_path
 from structs import FijParams, FijResult, FijExec, clone_fij_params
 from ioctl_codes import IOCTL_EXEC_AND_FAULT
 
@@ -75,7 +79,7 @@ def run_with_retries(
 
 def _label_from_params(params: FijParams) -> str:
     """
-    Best-effort human-readable label for logs & errors.
+    logs & errors.
     """
     def _extract(raw: bytes) -> str:
         return bytes(raw).split(b"\0", 1)[0].decode(errors="ignore")
@@ -181,6 +185,27 @@ def run_injection_campaign(
         print(f"  Minimum baseline time: {min_time_s * 1000.0:.3f} ms")
         print(f"  Selected max_delay_ms: {max_delay_ms} ms")
 
+    # Create dir to contain the logs of the injection campaign
+    def _cstr(buf: bytes) -> str:
+        return bytes(buf).split(b"\0", 1)[0].decode(errors="ignore")
+
+    # simple slug so the folder name is filesystem-friendly
+    _slug_re = re.compile(r"[^A-Za-z0-9._-]+")
+    def _slug(s: str) -> str:
+        return _slug_re.sub("_", s.strip()).strip("_").lower()
+
+    # --- build "<filename>+<args>" ---
+    filename   = Path(_cstr(base_params.process_path)).name or "campaign"   # ONLY last part
+    args_str   = _cstr(base_params.process_args)
+
+    parts = [_slug(filename)]
+    if args_str:
+        parts += ["+", _slug(args_str)]
+
+    logs_folder = "_".join(parts)  # e.g., myprog.bin_+_v_1.2
+
+    path = create_dir_in_path("../fij_logs", logs_folder)
+
     # Phase 2: injection
     if verbose:
         print(
@@ -202,8 +227,15 @@ def run_injection_campaign(
                 max_retries=max_retries,
                 retry_delay_ms=retry_delay_ms,
             )
+            print(f"dt={dt:.6f}s, target={res.target_tgid}, duration={res.duration_ns}, ec={res.exit_code}")
             inj_times.append(dt)
             inj_results.append(res)
+            log_injection_iteration(
+                base_path=path,   # this is the campaign folder from create_dir_in_path
+                i=i,              # loop index
+                dt_seconds=dt,
+                fij_result=res,   # raw FijResult from the kernel
+            )
             if verbose:
                 print(f"  Injection run {i+1}/{runs}: {dt * 1000.0:.3f} ms")
         except OSError as e:
@@ -237,5 +269,4 @@ def run_injection_campaign(
         "avg_ms": avg * 1000.0,
         "std_ms": std * 1000.0,
         "inj_times_ms": [t * 1000.0 for t in inj_times],
-        # You can also expose inj_results / baseline_results if needed.
     }

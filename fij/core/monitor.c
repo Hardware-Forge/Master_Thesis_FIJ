@@ -65,10 +65,12 @@ static int monitor_thread_fn(void *data)
         fij_uprobe_disarm_sync(ctx);
     }
 
+    WRITE_ONCE(ctx->exec.result.exit_code, exit_code);
+    
     WRITE_ONCE(ctx->running, 0);
     complete(&ctx->monitor_done);
     WRITE_ONCE(ctx->pc_monitor_thread, NULL);
-
+    
 
     put_task_struct(leader);
     kfree(ma);

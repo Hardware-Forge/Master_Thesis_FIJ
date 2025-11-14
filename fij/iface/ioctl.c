@@ -44,7 +44,7 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         char *path_copy = NULL, *args_copy = NULL, *cursor = NULL;
         int argc = 0, err = 0;
 
-        struct fij_exec u;
+        struct fij_exec u = {};
         if (copy_from_user(&u, (void __user *)arg, sizeof(u.params)))
         return -EFAULT;
 
@@ -130,7 +130,10 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
             goto fail_start;
         }
 
-        if (copy_to_user((void __user *)arg, &u, sizeof(u)))
+        // On return, copy back the result into the user's buffer
+        if (copy_to_user(&((struct fij_exec __user *)arg)->result,
+                 &ctx->exec.result,
+                 sizeof(ctx->exec.result)))
             return -EFAULT;
 
 fail_start:

@@ -26,7 +26,7 @@ class FijParams(ctypes.Structure):
 
 class FijResult(ctypes.Structure):
     _fields_ = [
-        ("status", ctypes.c_int),
+        ("exit_code", ctypes.c_int),
         ("target_tgid", ctypes.c_int),
         ("fault_injected", ctypes.c_int),
         ("duration_ns", ctypes.c_ulonglong),
