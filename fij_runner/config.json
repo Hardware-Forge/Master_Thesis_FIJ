@@ -1,20 +1,21 @@
 {
+  "base_path": "/home/andrea/Desktop/test",
   "defaults": {
     "runs": 10,
     "weight_mem": 5
   },
   "targets": [
     {
-      "path": "/home/andrea/Desktop/test/processes",
+      "path": "{base_path}/python/filter_heavy.py",
 
       "defaults": {
-        "runs": 3,
+        "runs": 4,
         "weight_mem": 5
       },
 
       "args": [
         {
-          "value": "2 2 2"
+          "value": "{base_path}/python/fbimage.bmp   {campaign}/injection_{run}/fbgauss.bmp   -f blur --iters 1000 --disk-roundtrip --workfile /tmp/work.bmp"
         }
       ]
     }

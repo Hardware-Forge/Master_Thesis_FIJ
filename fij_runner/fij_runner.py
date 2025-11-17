@@ -145,6 +145,37 @@ def run_injection_campaign(
         print(f"  device={device}")
         print()
 
+
+    # Create dir to contain the logs of the injection campaign
+    def _cstr(buf: bytes) -> str:
+        return bytes(buf).split(b"\0", 1)[0].decode(errors="ignore")
+
+    # simple slug so the folder name is filesystem-friendly
+    _slug_re = re.compile(r"[^A-Za-z0-9._-]+")
+    def _slug(s: str) -> str:
+        return _slug_re.sub("_", s.strip()).strip("_").lower()
+
+    # --- build "<filename>+<args>" ---
+    filename   = Path(_cstr(base_params.process_path)).name     #take last part to get the filename
+    args_str   = _cstr(base_params.process_args)
+
+    parts = [_slug(filename)]
+    if args_str:
+        parts += ["+", _slug(args_str)]
+
+    logs_folder = "_".join(parts)  # e.g., myprog.bin_+_v_1.2
+
+    path = create_dir_in_path("../fij_logs", logs_folder)
+
+    args_template = _cstr(base_params.process_args)
+
+    new_path = path / "no_inj"
+
+    baseline_run_dir = new_path / "injection_0"
+    #create directory that can contain program output when not injecting faults
+    baseline_run_dir.mkdir(parents=True, exist_ok=True)
+
+
     # Phase 1: baseline (no injection)
     if verbose:
         print(f"Phase 1: running {baseline_runs} baseline IOCTL calls (no_injection=1)")
@@ -154,6 +185,17 @@ def run_injection_campaign(
 
     for i in range(baseline_runs):
         try:
+            # here the args are modified so that the process outputs in a no_inj folder for that
+            # path+args campaing
+            
+            expanded_args = (
+                args_template
+                .replace("{campaign}", str(new_path))
+                .replace("{run}", "0")
+            )
+
+            base_params.process_args = expanded_args.encode() + b"\0"
+
             dt, res = run_with_retries(
                 device=device,
                 base_params=base_params,
@@ -185,27 +227,6 @@ def run_injection_campaign(
         print(f"  Minimum baseline time: {min_time_s * 1000.0:.3f} ms")
         print(f"  Selected max_delay_ms: {max_delay_ms} ms")
 
-    # Create dir to contain the logs of the injection campaign
-    def _cstr(buf: bytes) -> str:
-        return bytes(buf).split(b"\0", 1)[0].decode(errors="ignore")
-
-    # simple slug so the folder name is filesystem-friendly
-    _slug_re = re.compile(r"[^A-Za-z0-9._-]+")
-    def _slug(s: str) -> str:
-        return _slug_re.sub("_", s.strip()).strip("_").lower()
-
-    # --- build "<filename>+<args>" ---
-    filename   = Path(_cstr(base_params.process_path)).name or "campaign"   # ONLY last part
-    args_str   = _cstr(base_params.process_args)
-
-    parts = [_slug(filename)]
-    if args_str:
-        parts += ["+", _slug(args_str)]
-
-    logs_folder = "_".join(parts)  # e.g., myprog.bin_+_v_1.2
-
-    path = create_dir_in_path("../fij_logs", logs_folder)
-
     # Phase 2: injection
     if verbose:
         print(
@@ -218,6 +239,18 @@ def run_injection_campaign(
 
     for i in range(runs):
         try:
+            run_ith_directory = path / f"injection_{i}"
+            run_ith_directory.mkdir(parents=True, exist_ok=True)
+            # here the args are modified so that the output path of the process becomes the one of 
+            # the ith fault injection
+            expanded_args = (
+                args_template
+                .replace("{campaign}", str(path))
+                .replace("{run}", str(i))
+            )
+
+            base_params.process_args = expanded_args.encode() + b"\0"
+
             dt, res = run_with_retries(
                 device=device,
                 base_params=base_params,

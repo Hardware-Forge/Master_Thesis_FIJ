@@ -189,13 +189,20 @@ def build_fij_jobs_from_config(config: Dict[str, Any]) -> List[FijJob]:
     """
     global_defaults = config.get("defaults", {})
     targets = config.get("targets", [])
+    base_path = config.get("base_path", "")
 
     jobs: List[FijJob] = []
 
     for t in targets:
-        path = t.get("path")
-        if not path:
+        raw_path = t.get("path")
+        if not raw_path:
             raise ValueError("Each target must have a 'path'")
+
+        # Replace {base_path}
+        if base_path:
+            path = raw_path.replace("{base_path}", base_path)
+        else:
+            path = raw_path
 
         target_defaults = {}
         target_defaults.update(global_defaults)
@@ -226,6 +233,9 @@ def build_fij_jobs_from_config(config: Dict[str, Any]) -> List[FijJob]:
 
             # args: accept "value" or "args"
             arg_val = merged.get("value", "") or merged.get("args", "")
+            # replace {base_path} to the base_path value if specified
+            if isinstance(arg_val, str) and base_path:
+                arg_val = arg_val.replace("{base_path}", base_path)
             _set_cstring(p, "process_args", arg_val)
 
             # numeric / boolean fields

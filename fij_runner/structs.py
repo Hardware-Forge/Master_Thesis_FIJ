@@ -4,8 +4,8 @@ import ctypes
 class FijParams(ctypes.Structure):
     _fields_ = [
         ("process_name",      ctypes.c_char * 256),
-        ("process_path",      ctypes.c_char * 256),
-        ("process_args",      ctypes.c_char * 256),
+        ("process_path",      ctypes.c_char * 1024),
+        ("process_args",      ctypes.c_char * 4096),
         ("target_pc",         ctypes.c_int),
         ("target_pc_present", ctypes.c_int),
         ("target_reg",        ctypes.c_int),

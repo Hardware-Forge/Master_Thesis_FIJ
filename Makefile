@@ -7,6 +7,7 @@
 KDIR        ?=
 INCDIRS     ?=
 SUDO        ?= sudo
+CONFIGJSON  ?= ./fij_runner/config.json #relative path from the directory of this file
 
 KMOD_DIR    := fij
 USER_DIR    := fij_command
@@ -41,6 +42,21 @@ run:
 
 logs:
 	@$(MAKE) -C $(KMOD_DIR) logs
+
+############################
+# Start campaign           #
+############################
+start:
+	@if [ -z $(CONFIGJSON) ]; then \
+		echo "ERROR: CONFIGJSON is not set."; \
+		echo "Please edit the Makefile and set CONFIGJSON to your config file path."; \
+		exit 1; \
+	fi
+	@if [ ! -f $(CONFIGJSON) ]; then \
+		echo "ERROR: CONFIGJSON file not found: $(CONFIGJSON)"; \
+		exit 1; \
+	fi
+	python3 fij_runner/fij_campaign.py $(CONFIGJSON)
 
 ############################
 # Userspace delegation     #

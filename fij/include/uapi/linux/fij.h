@@ -18,8 +18,8 @@ enum fij_reg_id {
 
 struct fij_params {
     char process_name[256];
-    char process_path[256];
-    char process_args[256];
+    char process_path[1024];
+    char process_args[4096];
     int target_pc;     /* offset from start_code in INT */
     int target_pc_present;
     int target_reg;             /* enum fij_reg_id */

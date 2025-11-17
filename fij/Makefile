@@ -12,8 +12,7 @@ fij-objs := \
     core/monitor.o \
     core/exec_helper.o \
 	core/fij_regs.o \
-    core/util.o \
-	core/fij_file_tracking.o
+    core/util.o
 
 # Include paths for in-tree and userspace headers
 ccflags-y += -I$(src)/include -I$(src)/include/uapi/linux
