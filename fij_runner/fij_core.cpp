@@ -291,10 +291,13 @@ void log_injection_iteration(
     json raw_result;
 
     raw_result["iteration_number"]  = res.iteration_number;
+    raw_result["fault_injected"]    = res.fault_injected;
     raw_result["signal"]            = res.sigal;
+    raw_result["process_hanged"]    = res.process_hanged;
     raw_result["exit_code"]         = res.exit_code;
     raw_result["target_tgid"]       = res.target_tgid;
-    raw_result["fault_injected"]    = res.fault_injected;
+    raw_result["pid_idx"]           = res.pid_idx;
+    raw_result["thread_idx"]        = res.thread_idx;
     raw_result["injection_time_ns"] = static_cast<std::uint64_t>(res.injection_time_ns);
     raw_result["memory_flip"]       = res.memory_flip;
 

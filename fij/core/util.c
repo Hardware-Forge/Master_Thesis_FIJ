@@ -62,7 +62,7 @@ int fij_send_cont(pid_t tgid)
     return 0;
 }
 
-struct task_struct *fij_pick_random_user_thread(int tgid)
+struct task_struct *fij_pick_random_user_thread(int tgid, struct fij_ctx *ctx)
 {
     struct task_struct *g, *t, *chosen = NULL;
     unsigned int n = 0, pick, idx = 0;
@@ -87,6 +87,7 @@ struct task_struct *fij_pick_random_user_thread(int tgid)
             if (idx++ == pick) {
                 get_task_struct(t);
                 chosen = t;
+                WRITE_ONCE(ctx->exec.result.thread_idx, chosen);
                 pr_info("thread %d chosen\n", pick);
                 break;
             }
@@ -97,13 +98,13 @@ struct task_struct *fij_pick_random_user_thread(int tgid)
     return chosen; /* ref held if non-NULL */
 }
 
-struct task_struct *fij_pick_user_thread_by_index(int tgid, int n1)
+struct task_struct *fij_pick_user_thread_by_index(int tgid, int n1, struct fij_ctx *ctx)
 {
     struct task_struct *g, *t, *chosen = NULL;
     unsigned int cnt = 0, idx = 0, target;
 
     if (n1 <= 0)
-        return fij_pick_random_user_thread(tgid);
+        return fij_pick_random_user_thread(tgid, ctx);
 
     rcu_read_lock();
     g = fij_rcu_find_get_task_by_tgid(tgid);
@@ -133,6 +134,7 @@ struct task_struct *fij_pick_user_thread_by_index(int tgid, int n1)
             }
         }
     }
+    WRITE_ONCE(ctx->exec.result.thread_idx, target);
     pr_info("thread %d chosen\n", target+1);
     rcu_read_unlock();
     put_task_struct(g);

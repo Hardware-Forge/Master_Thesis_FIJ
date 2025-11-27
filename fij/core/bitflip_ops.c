@@ -305,6 +305,7 @@ int fij_stop_flip_resume_one_random(struct fij_ctx *ctx)
         /* Choose TGID of process to stop */
         idx = (int)get_random_u32_below(ctx->ntargets);
     }
+    WRITE_ONCE(ctx->exec.result.pid_idx, idx);
     pid_t tgid = ctx->targets[idx];
     WRITE_ONCE(ctx->exec.result.target_tgid, tgid);
 
@@ -312,9 +313,9 @@ int fij_stop_flip_resume_one_random(struct fij_ctx *ctx)
         return fij_stop_flip_resume_all_threads(ctx, tgid);
 
     if (ctx->exec.params.thread_present)
-        t = fij_pick_user_thread_by_index(tgid, ctx->exec.params.thread);
+        t = fij_pick_user_thread_by_index(tgid, ctx->exec.params.thread, ctx);
     else
-        t = fij_pick_random_user_thread(tgid);
+        t = fij_pick_random_user_thread(tgid, ctx);
     if (!t)
         return -ESRCH;
 

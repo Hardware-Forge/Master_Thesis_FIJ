@@ -139,7 +139,10 @@ struct fij_result {
     __s32 exit_code;
     __s32 sigal;
     __s32 target_tgid;
+    __s32 pid_idx;
+    __s32 thread_idx;
     __s32 fault_injected; // 1/0
+    __s32 process_hanged;
     __u64 injection_time_ns;
     __u32 memory_flip;
     __u64 target_address;

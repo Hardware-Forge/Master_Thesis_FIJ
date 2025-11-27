@@ -223,8 +223,8 @@ int  fij_exec_and_stop(const char *path, char *const argv[], struct fij_ctx *ctx
 int   fij_va_to_file_off(struct task_struct *t, unsigned long va,
                          struct inode **out_inode, loff_t *out_off);
 int   fij_send_cont(pid_t tgid);
-struct task_struct *fij_pick_random_user_thread(int tgid);
-struct task_struct *fij_pick_user_thread_by_index(int tgid, int n1);
+struct task_struct *fij_pick_random_user_thread(int tgid, struct fij_ctx *ctx);
+struct task_struct *fij_pick_user_thread_by_index(int tgid, int n1, struct fij_ctx *ctx);
 struct task_struct *fij_rcu_find_get_task_by_tgid(pid_t tgid);
 int fij_pick_random_bit64(void);
 enum fij_reg_id fij_pick_random_reg_any(void);

@@ -1,5 +1,5 @@
 {
-  "workers": 1,
+  "workers": 4,
   "base_path": "/home/andrea/Desktop/test",
   "defaults": {
     "runs": 1,

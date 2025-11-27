@@ -33,6 +33,7 @@ static int monitor_thread_fn(void *data)
         }
         if (kthread_should_stop()) {
             exit_code = SIGKILL;
+            WRITE_ONCE(ctx->exec.result.process_hanged, 1);
             break;
         }
 
