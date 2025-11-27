@@ -1,26 +1,20 @@
-# Top-level Makefile (placed in the parent directory)
-# Layout:
-#   ./fij           -> kernel module
-#   ./fij_command   -> userspace CLI
-
-# Allow overrides like: make KDIR=/path/to/kernel build-module
 KDIR        ?=
 INCDIRS     ?=
 SUDO        ?= sudo
 CONFIGJSON  ?= ./fij_runner/config.json #relative path from the directory of this file
 
-KMOD_DIR    := fij
-USER_DIR    := fij_command
+KMOD_DIR        := fij
+USER_DIR        := fij_command
+RUNNERCPP_DIR   := fij_runner
 
 .PHONY: all build install uninstall \
         build-module install-module remove-module clean-module \
         build-user install-user uninstall-user clean-user \
-        clean distclean run logs help
+        build-runnercpp clean-runnercpp \
+        clean distclean run logs help	\
 
 # Default: build everything (module first, then userspace)
 all: build
-
-build: build-module build-user
 
 ############################
 # Kernel module delegation #
@@ -56,7 +50,7 @@ start:
 		echo "ERROR: CONFIGJSON file not found: $(CONFIGJSON)"; \
 		exit 1; \
 	fi
-	python3 fij_runner/fij_campaign.py $(CONFIGJSON)
+	./fij_runner/fij_app $(CONFIGJSON)
 
 ############################
 # Userspace delegation     #
@@ -73,23 +67,33 @@ uninstall-user:
 clean-user:
 	@$(MAKE) -C $(USER_DIR) clean
 
+############################
+# fij_runnercpp build/clean#
+############################
+build-runnercpp:
+	@$(MAKE) -C $(RUNNERCPP_DIR)
+
+clean-runnercpp:
+	@$(MAKE) -C $(RUNNERCPP_DIR) clean
+
 #####################################
 # Ordered system-wide install steps #
 #####################################
 # IMPORTANT: install module first, then userspace.
 install:
 	@$(MAKE) install-module
-	@$(MAKE) install-user
+	@$(MAKE) build-runnercpp
 
 # Reverse order on uninstall: remove userspace, then module
 uninstall:
 	@$(MAKE) uninstall-user
 	@$(MAKE) remove-module
+	@$(MAKE) clean
 
 ############################
 # Cleaning                 #
 ############################
-clean: clean-module clean-user
+clean: clean-module clean-user clean-runnercpp   # <-- added clean-runnercpp
 distclean: clean
 
 ############################
@@ -97,18 +101,20 @@ distclean: clean
 ############################
 help:
 	@echo "Targets:"
-	@echo "  build (default)   - build kernel module then userspace"
-	@echo "  install           - install kernel module, then userspace"
-	@echo "  uninstall         - uninstall userspace, then remove kernel module"
-	@echo "  build-module      - build only the kernel module"
-	@echo "  install-module    - insmod the kernel module"
-	@echo "  remove-module     - rmmod the kernel module"
-	@echo "  build-user        - build only the userspace program"
-	@echo "  install-user      - install the userspace program"
-	@echo "  uninstall-user    - uninstall the userspace program"
-	@echo "  run               - load module and print usage hint"
-	@echo "  logs              - follow kernel logs"
-	@echo "  clean             - clean both subprojects"
+	@echo "  build (default)      - build kernel module, userspace CLI, and runnercpp app"
+	@echo "  install              - install kernel module, then userspace"
+	@echo "  uninstall            - uninstall userspace, then remove kernel module"
+	@echo "  build-module         - build only the kernel module"
+	@echo "  install-module       - insmod the kernel module"
+	@echo "  remove-module        - rmmod the kernel module"
+	@echo "  build-user           - build only the userspace program"
+	@echo "  install-user         - install the userspace program"
+	@echo "  uninstall-user       - uninstall the userspace program"
+	@echo "  build-runnercpp      - build only the C++ runner app"
+	@echo "  clean-runnercpp      - clean only the C++ runner app"
+	@echo "  run                  - load module and print usage hint"
+	@echo "  logs                 - follow kernel logs"
+	@echo "  clean                - clean all subprojects"
 	@echo ""
 	@echo "Variables:"
 	@echo "  KDIR=/path/to/kernel/build   (override kernel build dir if needed)"

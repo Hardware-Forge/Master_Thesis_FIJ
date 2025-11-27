@@ -1,26 +1,30 @@
 {
+  "workers": 4,
   "base_path": "/home/andrea/Desktop/test",
   "defaults": {
-    "runs": 10,
-    "weight_mem": 5
+    "runs": 1,
+    "weight_mem": 15
   },
   "targets": [
     {
       "path": "{base_path}/python/filter_heavy.py",
 
       "defaults": {
-        "runs": 4,
-        "weight_mem": 5
+        "runs": 1000,
+        "weight_mem": 19
       },
 
       "args": [
         {
-          "value": "{base_path}/python/fbimage.bmp   {campaign}/injection_{run}/fbgauss.bmp   -f blur --iters 1000 --disk-roundtrip --workfile /tmp/work.bmp"
+          "value": "{base_path}/python/fbimage.bmp   {campaign}/injection_{run}/fbgauss.bmp   -f blur --iters 2 --disk-roundtrip --workfile /tmp/work.bmp"
         }
       ]
     }
-    // { "path": "/home/andrea/Desktop/test/test_inject",
-    //   "args":[]
+    // { "path": "/home/andrea/Desktop/test/processes",
+    //   "defaults": {
+    //     "reg":"rbx"
+    //   },
+    //   "args":[ {"value": "2 2 2"} ]
     // }
   ]
 }

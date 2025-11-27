@@ -7,12 +7,14 @@ fij-objs := \
     iface/chardev.o \
     iface/ioctl.o \
 	core/processes.o \
-    core/bitflip.o \
+    core/bitflip_ops.o \
+	core/bitflip_thread.o \
     core/uprobe.o \
     core/monitor.o \
     core/exec_helper.o \
 	core/fij_regs.o \
-    core/util.o
+    core/util.o	\
+	core/signal.o
 
 # Include paths for in-tree and userspace headers
 ccflags-y += -I$(src)/include -I$(src)/include/uapi/linux

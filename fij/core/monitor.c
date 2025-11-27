@@ -43,7 +43,15 @@ static int monitor_thread_fn(void *data)
         try_to_freeze();
     }
 
-    WRITE_ONCE(ctx->target_alive, false);
+    WRITE_ONCE(ctx->target_alive, 0);
+
+    if (ctx->bitflip_thread) {
+        pr_info("monitor: target finished, stopping bitflip thread\n");
+        if (waitqueue_active(&ctx->flip_wq)) {
+            wake_up_all(&ctx->flip_wq);
+        }
+        fij_stop_bitflip_thread(ctx); 
+    }
 
     if (exited) {
         int sig = exit_code & 0x7f;
@@ -145,9 +153,11 @@ void fij_monitor_stop(struct fij_ctx *ctx)
 
     if (t) {
         pr_info("fij: monitor_stop: waiting for monitor to finish\n");
-        wait_for_completion(&ctx->monitor_done);
+        WRITE_ONCE(ctx->target_alive, 0);
+        complete(&ctx->monitor_done);
         pr_info("fij: monitor_stop: monitor finished\n");
         WRITE_ONCE(ctx->pc_monitor_thread, NULL);
+        pr_info("fij: thread stop");
     }
      else {
         pr_info("fij: monitor_stop: no thread\n");
