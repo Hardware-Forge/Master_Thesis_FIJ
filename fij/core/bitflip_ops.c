@@ -1,5 +1,3 @@
-// bitflip_ops.c
-
 #include "fij_internal.h"
 #include <linux/mm.h>
 #include <linux/mm_types.h>
@@ -10,6 +8,7 @@
 #include <linux/uaccess.h>
 #include <linux/delay.h>
 #include <linux/freezer.h>
+#include <linux/highmem.h>
 
 /* Stop entire thread group */
 int fij_group_stop(pid_t tgid)
@@ -89,6 +88,7 @@ int fij_perform_mem_bitflip(struct fij_ctx *ctx, pid_t tgid)
     unsigned char orig_byte, flipped_byte;
     int count = 0, target_idx, bit_to_flip;
     int ret = 0;
+    bool is_file_backed = false;
 
     rcu_read_lock();
     task = pid_task(find_vpid(READ_ONCE(tgid)), PIDTYPE_TGID);
@@ -109,6 +109,7 @@ int fij_perform_mem_bitflip(struct fij_ctx *ctx, pid_t tgid)
 
     mmap_read_lock(mm);
     {
+        /* 1. Count valid VMAs */
         VMA_ITERATOR(vmi, mm, 0);
         vma_iter_init(&vmi, mm, 0);
         for_each_vma(vmi, vma) {
@@ -121,7 +122,7 @@ int fij_perform_mem_bitflip(struct fij_ctx *ctx, pid_t tgid)
             ret = -ENOENT;
             goto out_put_mm;
         }
-
+        /* 2. Select a VMA */
         target_idx = get_random_u32() % count;
         count = 0;
         vma = NULL;
@@ -138,13 +139,17 @@ int fij_perform_mem_bitflip(struct fij_ctx *ctx, pid_t tgid)
             ret = -ENOENT;
             goto out_put_mm;
         }
+        /* 3. Check if file-backed */
+        if (vma->vm_file) {
+            is_file_backed = true;
+        }
 
         vma_size = vma->vm_end - vma->vm_start;
         offset = get_random_u32() % vma_size;
         target_addr = vma->vm_start + offset;
     }
     mmap_read_unlock(mm);
-
+    /* 4. Read Original Byte */
     if (access_process_vm(task, target_addr, &orig_byte, 1, 0) != 1) {
         ret = -EFAULT;
         goto out_put_mm;
@@ -152,10 +157,35 @@ int fij_perform_mem_bitflip(struct fij_ctx *ctx, pid_t tgid)
 
     bit_to_flip = get_random_u32() % 8;
     flipped_byte = orig_byte ^ (1 << bit_to_flip);
-
+    /* 5. Write Flipped Byte */
     if (access_process_vm(task, target_addr, &flipped_byte, 1, FOLL_WRITE | FOLL_FORCE) != 1) {
         ret = -EFAULT;
         goto out_put_mm;
+    }
+
+    /* * 6. Capture page for restoration if it was file-backed.
+     * We do this AFTER the write to ensure we grab the specific page 
+     * that was modified (in case of COW).
+     */
+    if (is_file_backed) {
+        struct page *pinned_page = NULL;
+
+        mmap_read_lock(mm);
+        int gup_ret = get_user_pages_remote(mm, target_addr, 1,
+                                            FOLL_WRITE | FOLL_FORCE, 
+                                            &pinned_page, NULL);
+        mmap_read_unlock(mm);
+        
+        if (gup_ret == 1) {
+            set_page_dirty_lock(pinned_page);
+            ctx->restore.page = pinned_page;
+            ctx->restore.offset = target_addr & ~PAGE_MASK; // Offset within the page
+            ctx->restore.orig_byte = orig_byte;
+            ctx->restore.active = true;
+            pr_info("FIJ: File-backed injection detected at 0x%lx. Scheduled for restore.\n", target_addr);
+        } else {
+            pr_warn("FIJ: Failed to pin file-backed page for restore at 0x%lx\n", target_addr);
+        }
     }
 
     pr_info("bit flipped at 0x%lx (TGID %d): 0x%02x -> 0x%02x\n",
@@ -326,4 +356,31 @@ int fij_flip_for_task(struct fij_ctx *ctx, struct task_struct *t, pid_t tgid)
     } else {
         return fij_perform_mem_bitflip(ctx, tgid);
     }
+}
+
+void fij_revert_file_backed_bitflip(struct fij_ctx *ctx)
+{
+    if (!ctx->restore.active || !ctx->restore.page)
+        return;
+
+    pr_info("FIJ: Restoring file-backed page for TGID %d\n", ctx->target_tgid);
+
+    /* * Map the page into kernel address space. 
+     * kmap_local_page is safe for interrupt contexts/kthreads.
+     */
+    void *kaddr = kmap_local_page(ctx->restore.page);
+    unsigned char *ptr = (unsigned char *)kaddr + ctx->restore.offset;
+    
+    /* Write back the original value */
+    *ptr = ctx->restore.orig_byte;
+    
+    kunmap_local(kaddr);
+
+    /* * We are done with the page. We grabbed a reference 
+     * in get_user_pages_remote, so we must put it now.
+     */
+    put_page(ctx->restore.page);
+    
+    ctx->restore.page = NULL;
+    ctx->restore.active = false;
 }

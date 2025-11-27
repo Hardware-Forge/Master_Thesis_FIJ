@@ -16,9 +16,18 @@
 
 #include "fij_regs.h"
 
+static DECLARE_WAIT_QUEUE_HEAD(fij_mon_wq);
+
 
 /* Forward decl */
 struct task_struct;
+
+struct fij_restore_info {
+    struct page *page;      /* The physical page frame to restore */
+    unsigned long offset;   /* Offset within that page */
+    unsigned char orig_byte;
+    bool active;            /* Is there something to restore? */
+};
 
 struct fij_ctx {
     /* targeting */
@@ -58,6 +67,7 @@ struct fij_ctx {
     int    capacity;
 
     struct fij_exec exec;
+    struct fij_restore_info restore;
 };
 
 static const char *fij_reg_name(int id)
@@ -189,8 +199,8 @@ int  fij_flip_register_from_ptregs(struct fij_ctx *ctx,
                                    struct pt_regs *regs, pid_t tgid);
 int  fij_perform_mem_bitflip(struct fij_ctx *ctx, pid_t tgid);
 int  fij_stop_flip_resume_one_random(struct fij_ctx *ctx);
-int  fij_flip_for_task(struct fij_ctx *ctx,
-                       struct task_struct *t, pid_t tgid);
+int  fij_flip_for_task(struct fij_ctx *ctx, struct task_struct *t, pid_t tgid);
+void fij_revert_file_backed_bitflip(struct fij_ctx *ctx);
 
 /* ---- uprobes ---- */
 int  fij_uprobe_arm(struct fij_ctx *ctx, unsigned long target_va);
@@ -222,6 +232,5 @@ bool choose_register_target(int weight_mem, int only_mem);
 
 /* ---- signal ---- */
 int fij_send_sigkill(struct fij_ctx *ctx);
-
 
 #endif /* _LINUX_FIJ_INTERNAL_H */

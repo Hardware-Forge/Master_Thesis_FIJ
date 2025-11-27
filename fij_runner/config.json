@@ -1,5 +1,5 @@
 {
-  "workers": 4,
+  "workers": 1,
   "base_path": "/home/andrea/Desktop/test",
   "defaults": {
     "runs": 1,
@@ -7,7 +7,8 @@
   },
   "targets": [
     {
-      "path": "{base_path}/python/filter_heavy.py",
+      //"path": "{base_path}/python/filter_heavy.py",
+      "path": "{base_path}/prog_to_kill",
 
       "defaults": {
         "runs": 1000,
@@ -16,7 +17,8 @@
 
       "args": [
         {
-          "value": "{base_path}/python/fbimage.bmp   {campaign}/injection_{run}/fbgauss.bmp   -f blur --iters 2 --disk-roundtrip --workfile /tmp/work.bmp"
+          // "value": "{base_path}/python/fbimage.bmp   {campaign}/injection_{run}/fbgauss.bmp   -f blur --iters 2 --disk-roundtrip --workfile /tmp/work.bmp"
+          "value": ""
         }
       ]
     }

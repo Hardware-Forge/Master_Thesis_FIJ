@@ -217,6 +217,19 @@ long fij_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         if (!ret)
             WRITE_ONCE(ctx->target_alive, false);
 
+        struct task_struct *mon_thread = READ_ONCE(ctx->pc_monitor_thread);
+        if (mon_thread) {
+            pr_info("IOCTL_KILL_TARGET: stopping monitor thread manually\n");
+            
+            /* 1. Explicitly wake the waitqueue to ensure the loop breaks immediately */
+            wake_up(&fij_mon_wq); 
+            
+            /* 2. Now call stop, which waits for the thread to return */
+            kthread_stop(mon_thread);
+            
+            pr_info("IOCTL_KILL_TARGET: monitor thread stopped\n");
+        }
+
         return ret;
     }
 

@@ -9,9 +9,6 @@
 #include <linux/wait.h>
 #include <linux/jiffies.h>
 
-/* Per-module waitqueue to let kthread_stop()/stop path wake the monitor */
-static DECLARE_WAIT_QUEUE_HEAD(fij_mon_wq);
-
 struct monitor_args {
     struct task_struct *leader;
     struct fij_ctx     *ctx;
@@ -34,13 +31,19 @@ static int monitor_thread_fn(void *data)
             exit_code = READ_ONCE(leader->exit_code);
             break;
         }
-        if (kthread_should_stop())
+        if (kthread_should_stop()) {
+            exit_code = SIGKILL;
             break;
+        }
 
         wait_event_killable_timeout(fij_mon_wq,
             kthread_should_stop() || READ_ONCE(leader->exit_state),
             msecs_to_jiffies(1));
         try_to_freeze();
+    }
+
+    if (ctx->restore.active) {
+        fij_revert_file_backed_bitflip(ctx);
     }
 
     WRITE_ONCE(ctx->target_alive, 0);
