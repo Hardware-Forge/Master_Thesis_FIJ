@@ -169,20 +169,40 @@ void fij_monitor_stop(struct fij_ctx *ctx)
 }
 
 /* wait until 't' is actually stopped by SIGSTOP */
+/* wait until 't' is actually stopped by SIGSTOP, or dies, or we are asked to stop */
 int fij_wait_task_stopped(struct task_struct *t, long timeout_jiffies)
 {
-    /* We rely on TASK_STOPPED | __TASK_TRACED states */
-    while (timeout_jiffies > 0) {
+    unsigned long end = jiffies + timeout_jiffies;
+    long remaining;
+
+    while (true) {
         unsigned long state = READ_ONCE(t->__state);
+        unsigned int exit_state = READ_ONCE(t->exit_state);
+
+        /* 1. SUCCESS: Task is stopped */
         if (state & (TASK_STOPPED | __TASK_TRACED))
             return 0;
 
+        /* 2. FAILURE: Task died while we were waiting */
+        if (exit_state & (EXIT_ZOMBIE | EXIT_DEAD)) {
+            // pr_debug("FIJ: target died while waiting for stop\n");
+            return -ESRCH;
+        }
+
+        /* 3. ABORT: Monitor asked us to stop (resolves the deadlock) */
+        if (kthread_should_stop())
+            return -EINTR;
+
+        /* 4. ABORT: Fatal signals (e.g. SIGKILL to us) */
         if (fatal_signal_pending(current))
             return -EINTR;
 
-        /* Sleep in small chunks to observe state changes */
-        set_current_state(TASK_UNINTERRUPTIBLE);
-        timeout_jiffies -= schedule_timeout(msecs_to_jiffies(10));
+        /* Check timeout before sleeping */
+        if (time_after(jiffies, end))
+            return -ETIMEDOUT;
+
+        /* Sleep briefly (interruptible so kthread_stop wakes us) */
+        /* msecs_to_jiffies(1) is usually 1 tick */
+        remaining = schedule_timeout_interruptible(msecs_to_jiffies(1));
     }
-    return -ETIMEDOUT;
 }

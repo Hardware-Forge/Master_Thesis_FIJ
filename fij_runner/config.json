@@ -7,18 +7,18 @@
   },
   "targets": [
     {
-      //"path": "{base_path}/python/filter_heavy.py",
-      "path": "{base_path}/prog_to_kill",
+      "path": "{base_path}/python/filter_heavy.py",
+      //"path": "{base_path}/test_inject",
 
       "defaults": {
-        "runs": 1000,
+        "runs": 100000,
         "weight_mem": 19
       },
 
       "args": [
         {
-          // "value": "{base_path}/python/fbimage.bmp   {campaign}/injection_{run}/fbgauss.bmp   -f blur --iters 2 --disk-roundtrip --workfile /tmp/work.bmp"
-          "value": ""
+          "value": "{base_path}/python/fbimage.bmp   {campaign}/injection_{run}/fbgauss.bmp   -f blur --iters 2 --disk-roundtrip --workfile /tmp/work.bmp"
+          //"value": ""
         }
       ]
     }

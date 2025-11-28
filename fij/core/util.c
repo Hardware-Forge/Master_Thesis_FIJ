@@ -6,7 +6,8 @@
 struct task_struct *fij_rcu_find_get_task_by_tgid(pid_t tgid)
 {
     struct task_struct *tsk;
-
+    struct pid *pid;
+    pid = find_vpid(tgid);
     rcu_read_lock();
     tsk = pid_task(find_vpid(tgid), PIDTYPE_TGID);
     if (tsk)
@@ -52,8 +53,10 @@ int fij_va_to_file_off(struct task_struct *t, unsigned long va,
 int fij_send_cont(pid_t tgid)
 {
     struct pid *p = find_get_pid(tgid);
-    if (!p)
+    if (!p) {
+        pr_info("PID %d is already dead", tgid);
         return -ESRCH;
+    }
 
     /* SIGCONT resumes whole thread group even if sent to one thread */
     send_sig(SIGCONT, pid_task(p, PIDTYPE_TGID), 0);
@@ -87,7 +90,7 @@ struct task_struct *fij_pick_random_user_thread(int tgid, struct fij_ctx *ctx)
             if (idx++ == pick) {
                 get_task_struct(t);
                 chosen = t;
-                WRITE_ONCE(ctx->exec.result.thread_idx, chosen);
+                WRITE_ONCE(ctx->exec.result.thread_idx, pick);
                 pr_info("thread %d chosen\n", pick);
                 break;
             }

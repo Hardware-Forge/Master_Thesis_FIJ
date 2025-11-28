@@ -108,7 +108,7 @@ std::pair<double, struct fij_result> run_send_and_poll(
             auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
             if(elapsed_ms >= (10*max_delay_ms) && !no_injection && !killed) {
                 ioctl(fd, IOCTL_KILL_TARGET);
-                std::cout << "Process is being killed";
+                std::cout << "Iteration " << iteration_index << " : Process is being killed\n";
                 killed = 1;
             }
 

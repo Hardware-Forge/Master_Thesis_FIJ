@@ -14,12 +14,6 @@
 int DEFAULT_MIN_DELAY_MS = 0;
 int DEFAULT_MAX_DELAY_MS = 1000;
 
-/*
- * These are declared in bitflip_ops.c and/or other TU's.
- * Make sure fij_internal.h declares them too.
- */
-extern int fij_stop_flip_resume_one_random(struct fij_ctx *ctx);
-
 /* Internal helper: high-resolution sleep in ns */
 static int fij_sleep_hrtimeout_interruptible_ns(u64 delay_ns)
 {
@@ -151,7 +145,13 @@ int bitflip_thread_fn(void *data)
 out:
     WRITE_ONCE(ctx->exec.result.injection_time_ns, duration_ns);
     complete(&ctx->bitflip_done);
-    WRITE_ONCE(ctx->bitflip_thread, NULL);
+    while (!kthread_should_stop()) {
+        set_current_state(TASK_INTERRUPTIBLE);
+        if (kthread_should_stop())
+            break;
+        schedule();
+    }
+    set_current_state(TASK_RUNNING);
     return 0;
 }
 
@@ -171,14 +171,19 @@ int fij_start_bitflip_thread(struct fij_ctx *ctx)
 
 void fij_stop_bitflip_thread(struct fij_ctx *ctx)
 {
-    if (ctx->bitflip_thread) {
-        pr_info("fij: bitflip_stop: waking and stopping thread pid=%d\n",
-                ctx->bitflip_thread->pid);
-        kthread_stop(ctx->bitflip_thread);
-        pr_info("fij: bitflip_stop: thread stopped\n");
-        ctx->bitflip_thread = NULL;
+    struct task_struct *t = READ_ONCE(ctx->bitflip_thread);
+
+    if (t) {
+        pr_info("fij: stopping bitflip thread pid=%d\n", t->pid);
+        
+        wake_up_process(t); 
+        wake_up(&ctx->flip_wq);
+
+        kthread_stop(t); 
+        
+        pr_info("fij: bitflip thread stopped\n");
+        
+        WRITE_ONCE(ctx->bitflip_thread, NULL);
         WRITE_ONCE(ctx->running, 0);
-    } else {
-        pr_info("fij: bitflip_stop: no thread\n");
     }
 }

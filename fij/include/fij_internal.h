@@ -194,7 +194,6 @@ void fij_stop_bitflip_thread(struct fij_ctx *ctx);
 
 /* bitflip_ops.c */
 int  fij_group_stop(pid_t tgid);
-void fij_group_cont(pid_t tgid);
 int  fij_flip_register_from_ptregs(struct fij_ctx *ctx,
                                    struct pt_regs *regs, pid_t tgid);
 int  fij_perform_mem_bitflip(struct fij_ctx *ctx, pid_t tgid);

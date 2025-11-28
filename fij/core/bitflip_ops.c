@@ -13,32 +13,26 @@
 /* Stop entire thread group */
 int fij_group_stop(pid_t tgid)
 {
-    struct task_struct *g = NULL;
+    struct task_struct *task;
+    int ret = -ESRCH;
 
+    pr_info("preparing to stop %d", tgid);
+    /* * RCU protects the task_struct from disappearing while we use it.
+     * We don't need get_task_struct() if we stay inside the RCU block.
+     */
     rcu_read_lock();
-    g = fij_rcu_find_get_task_by_tgid(tgid);
-    if (g)
-        get_task_struct(g);
+    
+    /* 1. Look up the task pointer from the integer TGID */
+    task = pid_task(find_vpid(tgid), PIDTYPE_TGID);
+    
+    if (task) {
+        ret = send_sig(SIGSTOP, task, 1);
+        pr_info("stopped PID %d", tgid);
+    }
+    
     rcu_read_unlock();
-
-    if (!g)
-        return -ESRCH;
-
-    send_sig(SIGSTOP, g, 1);
-    put_task_struct(g);
-    return 0;
-}
-
-/* Continue entire thread group */
-void fij_group_cont(pid_t tgid)
-{
-    struct task_struct *g = NULL;
-
-    rcu_read_lock();
-    g = fij_rcu_find_get_task_by_tgid(tgid);
-    if (g)
-        send_sig(SIGCONT, g, 1);
-    rcu_read_unlock();
+    
+    return ret;
 }
 
 /* Flip a register bit from pt_regs */
@@ -107,7 +101,11 @@ int fij_perform_mem_bitflip(struct fij_ctx *ctx, pid_t tgid)
         goto out_put_task;
     }
 
-    mmap_read_lock(mm);
+    if (!mmap_read_trylock(mm)) {
+        // Lock is busy - process might be dying or heavy IO. Skip this flip.
+        ret = -EBUSY; 
+        goto out_put_mm;
+    }
     {
         /* 1. Count valid VMAs */
         VMA_ITERATOR(vmi, mm, 0);
@@ -149,6 +147,12 @@ int fij_perform_mem_bitflip(struct fij_ctx *ctx, pid_t tgid)
         target_addr = vma->vm_start + offset;
     }
     mmap_read_unlock(mm);
+
+    if (kthread_should_stop() || !READ_ONCE(ctx->target_alive)) {
+        ret = -ECANCELED;
+        goto out_put_mm;
+    }
+
     /* 4. Read Original Byte */
     if (access_process_vm(task, target_addr, &orig_byte, 1, 0) != 1) {
         ret = -EFAULT;
@@ -170,21 +174,25 @@ int fij_perform_mem_bitflip(struct fij_ctx *ctx, pid_t tgid)
     if (is_file_backed) {
         struct page *pinned_page = NULL;
 
-        mmap_read_lock(mm);
-        int gup_ret = get_user_pages_remote(mm, target_addr, 1,
-                                            FOLL_WRITE | FOLL_FORCE, 
-                                            &pinned_page, NULL);
-        mmap_read_unlock(mm);
-        
-        if (gup_ret == 1) {
-            set_page_dirty_lock(pinned_page);
-            ctx->restore.page = pinned_page;
-            ctx->restore.offset = target_addr & ~PAGE_MASK; // Offset within the page
-            ctx->restore.orig_byte = orig_byte;
-            ctx->restore.active = true;
-            pr_info("FIJ: File-backed injection detected at 0x%lx. Scheduled for restore.\n", target_addr);
+        /* FIX: Trylock here as well */
+        if (mmap_read_trylock(mm)) {
+            int gup_ret = get_user_pages_remote(mm, target_addr, 1,
+                                                FOLL_WRITE | FOLL_FORCE, 
+                                                &pinned_page, NULL);
+            mmap_read_unlock(mm);
+            
+            if (gup_ret == 1) {
+                set_page_dirty_lock(pinned_page);
+                ctx->restore.page = pinned_page;
+                ctx->restore.offset = target_addr & ~PAGE_MASK;
+                ctx->restore.orig_byte = orig_byte;
+                ctx->restore.active = true;
+                pr_info("FIJ: File-backed injection detected at 0x%lx. Scheduled for restore.\n", target_addr);
+            } else {
+                pr_warn("FIJ: Failed to pin file-backed page for restore at 0x%lx\n", target_addr);
+            }
         } else {
-            pr_warn("FIJ: Failed to pin file-backed page for restore at 0x%lx\n", target_addr);
+            pr_warn("FIJ: Could not acquire lock to pin page (busy). Restoration may fail.\n");
         }
     }
 
@@ -269,7 +277,7 @@ static int fij_stop_flip_resume_all_threads(struct fij_ctx *ctx, pid_t tgid)
     }
 
     /* Resume the whole group via helper */
-    fij_group_cont(tgid);
+    fij_send_cont(tgid);
     put_task_struct(g);
 
     /*
@@ -285,15 +293,18 @@ int fij_stop_flip_resume_one_random(struct fij_ctx *ctx)
     int ret = 0;
     int idx;
 
+    pr_info("start fij_stop_flip_resume_one_random\n");
     /* Collect processes at runtime */
     ret = fij_collect_descendants(ctx, ctx->target_tgid);
-
-    if (ret)
+    if (ret) {
+        pr_warn("FIJ: collect_descendants failed: %d\n", ret);
         return ret;
+    }
 
-    /* No targets -> nothing to flip */
-    if (ctx->ntargets <= 0)
+    if (ctx->ntargets <= 0) {
+        pr_warn("FIJ: No targets found (process exited?)\n");
         return -ESRCH;
+    }
 
     if (ctx->exec.params.process_present) {
         /* the index of the process was chosen */
@@ -329,8 +340,12 @@ int fij_stop_flip_resume_one_random(struct fij_ctx *ctx)
     /* Wait for the chosen thread to be stopped */
     ret = fij_wait_task_stopped(t, msecs_to_jiffies(100));
     if (!ret) {
+        pr_info("starting fij_flip_for_task");
         /* Flip only this thread's saved user regs */
         ret = fij_flip_for_task(ctx, t, tgid);
+    }
+    else {
+        pr_info("task was not stopped correctly, exiting bitflip thread");
     }
 
     if (ret == 0) {
@@ -338,7 +353,7 @@ int fij_stop_flip_resume_one_random(struct fij_ctx *ctx)
     }
 
     /* Resume the whole group */
-    fij_group_cont(tgid);
+    fij_send_cont(tgid);
 
     put_task_struct(t);
     return ret;
@@ -353,8 +368,10 @@ int fij_flip_for_task(struct fij_ctx *ctx, struct task_struct *t, pid_t tgid)
         ctx->exec.params.target_reg != FIJ_REG_NONE) {
         if (!regs)
             return -EINVAL;
+        pr_info("starting flip in register");
         return fij_flip_register_from_ptregs(ctx, regs, tgid);
     } else {
+        pr_info("starting flip in memory");
         return fij_perform_mem_bitflip(ctx, tgid);
     }
 }
