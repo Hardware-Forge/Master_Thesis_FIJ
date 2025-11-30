@@ -11,7 +11,7 @@
       //"path": "{base_path}/test_inject",
 
       "defaults": {
-        "runs": 100000,
+        "runs": 2,
         "weight_mem": 19
       },
 

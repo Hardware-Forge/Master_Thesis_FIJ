@@ -308,8 +308,8 @@ void log_injection_iteration(
     };
 
     std::uint64_t addr   = res.target_address;
-    std::uint64_t before = res.target_before & 0xFFull;
-    std::uint64_t after  = res.target_after & 0xFFull;
+    std::uint64_t before = res.target_before;
+    std::uint64_t after  = res.target_after;
 
     raw_result["target_address"] = to_hex64(addr);
     raw_result["target_before"]  = to_hex64(before);
