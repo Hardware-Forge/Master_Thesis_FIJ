@@ -7,14 +7,49 @@ KMOD_DIR        := fij
 USER_DIR        := fij_command
 RUNNERCPP_DIR   := fij_runner
 
+# --- Detect Package Manager ---
+ifneq ($(shell which apt-get 2>/dev/null),)
+    PKG_MANAGER := apt
+    INSTALL_CMD := sudo apt-get update && sudo apt-get install -y
+    # Package names for Debian/Ubuntu
+    PKGS := build-essential linux-headers-$(shell uname -r) libopencv-dev nlohmann-json3-dev
+else ifneq ($(shell which dnf 2>/dev/null),)
+    PKG_MANAGER := dnf
+    INSTALL_CMD := sudo dnf install -y
+    # Package names for Fedora/RHEL
+    PKGS := kernel-devel kernel-headers opencv-devel nlohmann-json-devel gcc-c++
+else ifneq ($(shell which pacman 2>/dev/null),)
+    PKG_MANAGER := pacman
+    INSTALL_CMD := sudo pacman -S --noconfirm
+    # Package names for Arch Linux
+    PKGS := linux-headers opencv nlohmann-json base-devel
+else
+    PKG_MANAGER := unknown
+endif
+
 .PHONY: all build install uninstall \
         build-module install-module remove-module clean-module \
         build-user install-user uninstall-user clean-user \
         build-runnercpp clean-runnercpp \
         clean distclean run logs help	\
+		deps	\
 
 # Default: build everything (module first, then userspace)
-all: build
+all: deps build
+
+############################
+# Dependencies installation #
+############################
+deps:
+	@echo "Detected Package Manager: $(PKG_MANAGER)"
+ifneq ($(PKG_MANAGER),unknown)
+	$(INSTALL_CMD) $(PKGS)
+	@echo "Dependencies installed successfully."
+else
+	@echo "Error: Could not detect a supported package manager (apt, dnf, or pacman)."
+	@echo "Please manually install: OpenCV, nlohmann-json, and Kernel Headers."
+	@exit 1
+endif
 
 ############################
 # Kernel module delegation #
@@ -81,6 +116,7 @@ clean-runnercpp:
 #####################################
 # IMPORTANT: install module first, then userspace.
 install:
+	@$(MAKE) deps
 	@$(MAKE) install-module
 	@$(MAKE) build-runnercpp
 
@@ -93,7 +129,7 @@ uninstall:
 ############################
 # Cleaning                 #
 ############################
-clean: clean-module clean-user clean-runnercpp   # <-- added clean-runnercpp
+clean: clean-module clean-user clean-runnercpp
 distclean: clean
 
 ############################
