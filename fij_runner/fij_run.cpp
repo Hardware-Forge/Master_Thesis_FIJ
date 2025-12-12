@@ -356,5 +356,7 @@ CampaignResult run_injection_campaign(
         cr.inj_times_ms.push_back(t * 1000.0);
     }
 
+    analyze_injection_campaign(campaign_path);
+
     return cr;
 }

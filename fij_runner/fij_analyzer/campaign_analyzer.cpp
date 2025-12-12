@@ -1,0 +1,289 @@
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <vector>
+#include <filesystem>
+#include <map>
+#include <iomanip>
+#include <opencv2/opencv.hpp>
+#include <nlohmann/json.hpp>
+
+using json = nlohmann::json;
+namespace fs = std::filesystem;
+
+// ==========================================
+// UTILITY: Binary File Comparison
+// ==========================================
+bool are_files_identical_binary(const fs::path& p1, const fs::path& p2) {
+    std::ifstream f1(p1, std::ifstream::binary | std::ifstream::ate);
+    std::ifstream f2(p2, std::ifstream::binary | std::ifstream::ate);
+
+    if (f1.fail() || f2.fail()) return false;
+    if (f1.tellg() != f2.tellg()) return false; // Size mismatch
+
+    f1.seekg(0, std::ifstream::beg);
+    f2.seekg(0, std::ifstream::beg);
+    return std::equal(std::istreambuf_iterator<char>(f1.rdbuf()),
+                      std::istreambuf_iterator<char>(),
+                      std::istreambuf_iterator<char>(f2.rdbuf()));
+}
+
+// ==========================================
+// UTILITY: Image Logic (Optional)
+// ==========================================
+struct DiffResult {
+    bool is_image;
+    bool has_diff;
+    std::string desc;
+};
+
+DiffResult try_visual_diff(const fs::path& p_golden, const fs::path& p_inj, const fs::path& mask_out) {
+    // --- OpenCV Implementation ---
+    cv::Mat a = cv::imread(p_golden.string(), cv::IMREAD_UNCHANGED);
+    cv::Mat b = cv::imread(p_inj.string(), cv::IMREAD_UNCHANGED);
+
+    if (a.empty() || b.empty()) {
+        return {false, false, ""}; // Not images
+    }
+
+    if (a.size() != b.size() || a.type() != b.type()) {
+        return {true, true, "Size/Type mismatch"};
+    }
+
+    // Handle normalization (simplified 16bit -> 8bit logic)
+    if (a.depth() == CV_16U) {
+        a.convertTo(a, CV_8U, 1.0 / 257.0);
+        b.convertTo(b, CV_8U, 1.0 / 257.0);
+    } else if (a.depth() == CV_32F || a.depth() == CV_64F) {
+        a.convertTo(a, CV_8U, 255.0);
+        b.convertTo(b, CV_8U, 255.0);
+    }
+
+    // Ensure 3 channels for diffing if grayscale
+    if (a.channels() == 1) {
+        cv::cvtColor(a, a, cv::COLOR_GRAY2BGR);
+        cv::cvtColor(b, b, cv::COLOR_GRAY2BGR);
+    }
+
+    cv::Mat diff;
+    cv::absdiff(a, b, diff);
+
+    // Create mask (pixels where diff > 0)
+    cv::Mat mask;
+    cv::cvtColor(diff, mask, cv::COLOR_BGR2GRAY);
+    cv::threshold(mask, mask, 0, 255, cv::THRESH_BINARY);
+
+    int count = cv::countNonZero(mask);
+
+    if (count == 0) {
+        return {true, false, "Images Identical (Visual)"};
+    }
+
+    double pct = (double)count / (double)mask.total() * 100.0;
+    
+    // Write mask
+    cv::imwrite(mask_out.string(), mask);
+
+    std::ostringstream oss;
+    oss << "Img Diff: " << count << " px (" << std::fixed << std::setprecision(4) << pct << "%)";
+    return {true, true, oss.str()};
+}
+
+// ==========================================
+// CORE ANALYSIS FUNCTION
+// ==========================================
+
+struct AnalyzeStats {
+    int total_injected = 0;
+    int crashed = 0;
+    int hanged = 0;
+    int sdc = 0;
+    int benign = 0;
+    int errors = 0;
+};
+
+struct CsvRecord {
+    std::string index;
+    std::string type;
+    std::string details;
+    std::string json_file;
+};
+
+void analyze_injection_campaign(fs::path base_path) {
+    fs::path golden_dir = base_path / "no_inj/injection_0";
+    fs::path diff_root = base_path / "diff";
+
+    // Clean/Init diff directory
+    if (fs::exists(diff_root)) {
+        fs::remove_all(diff_root);
+    }
+    fs::create_directory(diff_root);
+
+    std::vector<CsvRecord> csv_records;
+    AnalyzeStats stats;
+
+    std::cout << "Reference: " << golden_dir << "\nStarting analysis...\n";
+
+    int i = 1;
+    while (true) {
+        fs::path inj_dir = base_path / ("injection_" + std::to_string(i));
+        if (!fs::exists(inj_dir)) break;
+
+        std::string current_json_filename = "injection_" + std::to_string(i) + ".json";
+        fs::path json_path = inj_dir / current_json_filename;
+
+        // 1. Load JSON
+        std::ifstream json_file(json_path);
+        if (!json_file.good()) {
+            csv_records.push_back({std::to_string(i), "ERROR", "JSON missing/corrupt", current_json_filename});
+            stats.errors++;
+            i++; continue;
+        }
+
+        json meta_data;
+        try {
+            json_file >> meta_data;
+        } catch (const std::exception& e) {
+            csv_records.push_back({std::to_string(i), "ERROR", "JSON Parse Error", current_json_filename});
+            stats.errors++;
+            i++; continue;
+        }
+
+        // 2. Filter Logic
+        auto& res_block = meta_data["result"];
+        if (res_block.value("fault_injected", 0) != 1) {
+            i++; continue;
+        }
+
+        stats.total_injected++;
+        int exit_code = res_block.value("exit_code", 0);
+        int process_hanged = res_block.value("process_hanged", 0);
+
+        std::string status_type = "BENIGN";
+        std::string status_details = "";
+        fs::path experiment_diff_dir = diff_root / ("diff_" + std::to_string(i));
+        bool sdc_detected = false;
+
+        // 3. Classification
+        if (exit_code != 0) {
+            if (process_hanged == 1) {
+                status_type = "HANG";
+                stats.hanged++;
+                status_details = "Exit: " + std::to_string(exit_code) + ", Hanged: 1";
+            } else {
+                status_type = "CRASH";
+                stats.crashed++;
+                status_details = "Exit: " + std::to_string(exit_code);
+            }
+        } else {
+            // SDC Check Logic
+            std::vector<std::string> details_list;
+            
+            for (const auto& entry : fs::directory_iterator(golden_dir)) {
+                if (entry.path().extension() == ".json") continue;
+
+                fs::path g_file = entry.path();
+                fs::path i_file = inj_dir / g_file.filename();
+
+                bool file_mismatch = false;
+                std::string file_note = "";
+
+                if (!fs::exists(i_file)) {
+                    file_mismatch = true;
+                    file_note = "MISSING: " + g_file.filename().string();
+                } else if (!are_files_identical_binary(g_file, i_file)) {
+                    file_mismatch = true;
+                    
+                    // Lazy creation of diff folder
+                    if (!fs::exists(experiment_diff_dir)) {
+                        fs::create_directories(experiment_diff_dir);
+                    }
+
+                    // Copy files for investigation
+                    try {
+                        std::string g_name = g_file.stem().string() + "_GOLDEN" + g_file.extension().string();
+                        std::string i_name = i_file.stem().string() + "_INJ" + i_file.extension().string();
+                        fs::copy_file(g_file, experiment_diff_dir / g_name, fs::copy_options::overwrite_existing);
+                        fs::copy_file(i_file, experiment_diff_dir / i_name, fs::copy_options::overwrite_existing);
+
+                        // Try Visual Diff
+                        fs::path mask_path = experiment_diff_dir / ("diff_mask_" + g_file.filename().string());
+                        DiffResult img_res = try_visual_diff(g_file, i_file, mask_path);
+
+                        if (img_res.is_image) {
+                            file_note = "SDC " + g_file.filename().string() + " [" + img_res.desc + "]";
+                        } else {
+                            file_note = "SDC " + g_file.filename().string() + " (Binary Mismatch)";
+                        }
+
+                    } catch(const fs::filesystem_error& e) {
+                        file_note = "SDC (Copy Error): " + std::string(e.what());
+                    }
+                }
+
+                if (file_mismatch) {
+                    sdc_detected = true;
+                    details_list.push_back(file_note);
+                }
+            }
+
+            if (sdc_detected) {
+                status_type = "SDC";
+                stats.sdc++;
+                // Join details with " | "
+                for(size_t k=0; k<details_list.size(); ++k) {
+                    status_details += details_list[k];
+                    if(k < details_list.size()-1) status_details += " | ";
+                }
+            }
+        }
+
+        // 4. Logging & CSV Update
+        if (status_type == "BENIGN") {
+            stats.benign++;
+        } else {
+            // Ensure diff folder exists (for Crashes/Hangs it might not exist yet)
+            if (!fs::exists(experiment_diff_dir)) {
+                fs::create_directories(experiment_diff_dir);
+            }
+            // Copy JSON log
+            fs::copy_file(json_path, experiment_diff_dir / current_json_filename, fs::copy_options::overwrite_existing);
+
+            csv_records.push_back({std::to_string(i), status_type, status_details, current_json_filename});
+        }
+        i++;
+    }
+
+    // 5. Final Report (CSV)
+    fs::path summary_path = diff_root / "summary.csv";
+    std::ofstream csv(summary_path);
+    
+    // Header
+    csv << "index,type,details,json_file\n";
+    
+    // Rows
+    for (const auto& rec : csv_records) {
+        csv << rec.index << "," << rec.type << "," << "\"" << rec.details << "\"" << "," << rec.json_file << "\n";
+    }
+
+    // Stats
+    auto get_pct = [&](int val) { return stats.total_injected > 0 ? (val * 100.0 / stats.total_injected) : 0.0; };
+
+    csv << ",,,\n"; // empty row
+    csv << "---,---,---,\n";
+    csv << "STATS,TOTAL INJECTIONS," << stats.total_injected << ",\n";
+    csv << "STATS,CRASHED," << stats.crashed << " (" << std::fixed << std::setprecision(2) << get_pct(stats.crashed) << "%),\n";
+    csv << "STATS,HANGED," << stats.hanged << " (" << std::fixed << std::setprecision(2) << get_pct(stats.hanged) << "%),\n";
+    csv << "STATS,SDC," << stats.sdc << " (" << std::fixed << std::setprecision(2) << get_pct(stats.sdc) << "%),\n";
+    csv << "STATS,BENIGN," << stats.benign << " (" << std::fixed << std::setprecision(2) << get_pct(stats.benign) << "%),\n";
+
+    csv.close();
+
+    std::cout << "\nAnalysis Complete.\n";
+    std::cout << "Total:   " << stats.total_injected << "\n";
+    std::cout << "Crashed: " << stats.crashed << "\n";
+    std::cout << "Hanged:  " << stats.hanged << "\n";
+    std::cout << "SDC:     " << stats.sdc << "\n";
+    std::cout << "Benign:  " << stats.benign << "\n";
+    std::cout << "Summary saved to: " << summary_path << std::endl;
+}

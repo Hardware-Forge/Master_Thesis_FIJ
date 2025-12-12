@@ -148,3 +148,10 @@ void run_campaigns_from_config(
     int retry_delay_ms             = 50,
     bool verbose                   = true
 );
+
+// --------------------------------------------------------------------------
+// Campaign Analyzer
+// --------------------------------------------------------------------------
+
+void analyze_injection_campaign(fs::path base_path_str);
+
