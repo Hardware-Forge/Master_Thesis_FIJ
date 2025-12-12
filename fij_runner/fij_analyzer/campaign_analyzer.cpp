@@ -29,7 +29,7 @@ bool are_files_identical_binary(const fs::path& p1, const fs::path& p2) {
 }
 
 // ==========================================
-// UTILITY: Image Logic (Optional)
+// UTILITY: Image Logic
 // ==========================================
 struct DiffResult {
     bool is_image;
@@ -38,19 +38,17 @@ struct DiffResult {
 };
 
 DiffResult try_visual_diff(const fs::path& p_golden, const fs::path& p_inj, const fs::path& mask_out) {
-    // --- OpenCV Implementation ---
     cv::Mat a = cv::imread(p_golden.string(), cv::IMREAD_UNCHANGED);
     cv::Mat b = cv::imread(p_inj.string(), cv::IMREAD_UNCHANGED);
 
     if (a.empty() || b.empty()) {
-        return {false, false, ""}; // Not images
+        return {false, false, ""}; 
     }
 
     if (a.size() != b.size() || a.type() != b.type()) {
         return {true, true, "Size/Type mismatch"};
     }
 
-    // Handle normalization (simplified 16bit -> 8bit logic)
     if (a.depth() == CV_16U) {
         a.convertTo(a, CV_8U, 1.0 / 257.0);
         b.convertTo(b, CV_8U, 1.0 / 257.0);
@@ -59,7 +57,6 @@ DiffResult try_visual_diff(const fs::path& p_golden, const fs::path& p_inj, cons
         b.convertTo(b, CV_8U, 255.0);
     }
 
-    // Ensure 3 channels for diffing if grayscale
     if (a.channels() == 1) {
         cv::cvtColor(a, a, cv::COLOR_GRAY2BGR);
         cv::cvtColor(b, b, cv::COLOR_GRAY2BGR);
@@ -68,7 +65,6 @@ DiffResult try_visual_diff(const fs::path& p_golden, const fs::path& p_inj, cons
     cv::Mat diff;
     cv::absdiff(a, b, diff);
 
-    // Create mask (pixels where diff > 0)
     cv::Mat mask;
     cv::cvtColor(diff, mask, cv::COLOR_BGR2GRAY);
     cv::threshold(mask, mask, 0, 255, cv::THRESH_BINARY);
@@ -81,7 +77,6 @@ DiffResult try_visual_diff(const fs::path& p_golden, const fs::path& p_inj, cons
 
     double pct = (double)count / (double)mask.total() * 100.0;
     
-    // Write mask
     cv::imwrite(mask_out.string(), mask);
 
     std::ostringstream oss;
@@ -95,16 +90,25 @@ DiffResult try_visual_diff(const fs::path& p_golden, const fs::path& p_inj, cons
 
 struct AnalyzeStats {
     int total_injected = 0;
+    
+    // Total counters
     int crashed = 0;
     int hanged = 0;
     int sdc = 0;
     int benign = 0;
     int errors = 0;
+
+    // Split counters (Reg / Mem)
+    int crashed_reg = 0; int crashed_mem = 0;
+    int hanged_reg = 0;  int hanged_mem = 0;
+    int sdc_reg = 0;     int sdc_mem = 0;
+    int benign_reg = 0;  int benign_mem = 0;
 };
 
 struct CsvRecord {
     std::string index;
     std::string type;
+    std::string location; // New field: "Register" or "Memory"
     std::string details;
     std::string json_file;
 };
@@ -113,7 +117,6 @@ void analyze_injection_campaign(fs::path base_path) {
     fs::path golden_dir = base_path / "no_inj/injection_0";
     fs::path diff_root = base_path / "diff";
 
-    // Clean/Init diff directory
     if (fs::exists(diff_root)) {
         fs::remove_all(diff_root);
     }
@@ -135,7 +138,7 @@ void analyze_injection_campaign(fs::path base_path) {
         // 1. Load JSON
         std::ifstream json_file(json_path);
         if (!json_file.good()) {
-            csv_records.push_back({std::to_string(i), "ERROR", "JSON missing/corrupt", current_json_filename});
+            csv_records.push_back({std::to_string(i), "ERROR", "UNKNOWN", "JSON missing/corrupt", current_json_filename});
             stats.errors++;
             i++; continue;
         }
@@ -144,7 +147,7 @@ void analyze_injection_campaign(fs::path base_path) {
         try {
             json_file >> meta_data;
         } catch (const std::exception& e) {
-            csv_records.push_back({std::to_string(i), "ERROR", "JSON Parse Error", current_json_filename});
+            csv_records.push_back({std::to_string(i), "ERROR", "UNKNOWN", "JSON Parse Error", current_json_filename});
             stats.errors++;
             i++; continue;
         }
@@ -155,6 +158,14 @@ void analyze_injection_campaign(fs::path base_path) {
             i++; continue;
         }
 
+        // 3. Determine Location (Memory vs Register)
+        // Check "result" block first, then root, defaulting to 0 (Register) if missing
+        int mem_flip_val = res_block.value("memory_flip", -1);
+        if(mem_flip_val == -1) mem_flip_val = meta_data.value("memory_flip", 0);
+
+        bool is_memory = (mem_flip_val == 1);
+        std::string loc_str = is_memory ? "Memory" : "Register";
+
         stats.total_injected++;
         int exit_code = res_block.value("exit_code", 0);
         int process_hanged = res_block.value("process_hanged", 0);
@@ -164,15 +175,17 @@ void analyze_injection_campaign(fs::path base_path) {
         fs::path experiment_diff_dir = diff_root / ("diff_" + std::to_string(i));
         bool sdc_detected = false;
 
-        // 3. Classification
+        // 4. Classification
         if (exit_code != 0) {
             if (process_hanged == 1) {
                 status_type = "HANG";
                 stats.hanged++;
+                if (is_memory) stats.hanged_mem++; else stats.hanged_reg++;
                 status_details = "Exit: " + std::to_string(exit_code) + ", Hanged: 1";
             } else {
                 status_type = "CRASH";
                 stats.crashed++;
+                if (is_memory) stats.crashed_mem++; else stats.crashed_reg++;
                 status_details = "Exit: " + std::to_string(exit_code);
             }
         } else {
@@ -194,19 +207,16 @@ void analyze_injection_campaign(fs::path base_path) {
                 } else if (!are_files_identical_binary(g_file, i_file)) {
                     file_mismatch = true;
                     
-                    // Lazy creation of diff folder
                     if (!fs::exists(experiment_diff_dir)) {
                         fs::create_directories(experiment_diff_dir);
                     }
 
-                    // Copy files for investigation
                     try {
                         std::string g_name = g_file.stem().string() + "_GOLDEN" + g_file.extension().string();
                         std::string i_name = i_file.stem().string() + "_INJ" + i_file.extension().string();
                         fs::copy_file(g_file, experiment_diff_dir / g_name, fs::copy_options::overwrite_existing);
                         fs::copy_file(i_file, experiment_diff_dir / i_name, fs::copy_options::overwrite_existing);
 
-                        // Try Visual Diff
                         fs::path mask_path = experiment_diff_dir / ("diff_mask_" + g_file.filename().string());
                         DiffResult img_res = try_visual_diff(g_file, i_file, mask_path);
 
@@ -230,7 +240,8 @@ void analyze_injection_campaign(fs::path base_path) {
             if (sdc_detected) {
                 status_type = "SDC";
                 stats.sdc++;
-                // Join details with " | "
+                if (is_memory) stats.sdc_mem++; else stats.sdc_reg++;
+                
                 for(size_t k=0; k<details_list.size(); ++k) {
                     status_details += details_list[k];
                     if(k < details_list.size()-1) status_details += " | ";
@@ -238,52 +249,59 @@ void analyze_injection_campaign(fs::path base_path) {
             }
         }
 
-        // 4. Logging & CSV Update
+        // 5. Logging & CSV Update
         if (status_type == "BENIGN") {
             stats.benign++;
+            if (is_memory) stats.benign_mem++; else stats.benign_reg++;
         } else {
-            // Ensure diff folder exists (for Crashes/Hangs it might not exist yet)
             if (!fs::exists(experiment_diff_dir)) {
                 fs::create_directories(experiment_diff_dir);
             }
-            // Copy JSON log
             fs::copy_file(json_path, experiment_diff_dir / current_json_filename, fs::copy_options::overwrite_existing);
 
-            csv_records.push_back({std::to_string(i), status_type, status_details, current_json_filename});
+            // Add Record (Now includes loc_str)
+            csv_records.push_back({std::to_string(i), status_type, loc_str, status_details, current_json_filename});
         }
         i++;
     }
 
-    // 5. Final Report (CSV)
+    // 6. Final Report (CSV)
     fs::path summary_path = diff_root / "summary.csv";
     std::ofstream csv(summary_path);
     
-    // Header
-    csv << "index,type,details,json_file\n";
+    // Updated Header
+    csv << "index,type,location,details,json_file\n";
     
-    // Rows
     for (const auto& rec : csv_records) {
-        csv << rec.index << "," << rec.type << "," << "\"" << rec.details << "\"" << "," << rec.json_file << "\n";
+        csv << rec.index << "," << rec.type << "," << rec.location << "," << "\"" << rec.details << "\"" << "," << rec.json_file << "\n";
     }
 
-    // Stats
+    // --- SUMMARY STATISTICS ---
     auto get_pct = [&](int val) { return stats.total_injected > 0 ? (val * 100.0 / stats.total_injected) : 0.0; };
 
-    csv << ",,,\n"; // empty row
-    csv << "---,---,---,\n";
-    csv << "STATS,TOTAL INJECTIONS," << stats.total_injected << ",\n";
-    csv << "STATS,CRASHED," << stats.crashed << " (" << std::fixed << std::setprecision(2) << get_pct(stats.crashed) << "%),\n";
-    csv << "STATS,HANGED," << stats.hanged << " (" << std::fixed << std::setprecision(2) << get_pct(stats.hanged) << "%),\n";
-    csv << "STATS,SDC," << stats.sdc << " (" << std::fixed << std::setprecision(2) << get_pct(stats.sdc) << "%),\n";
-    csv << "STATS,BENIGN," << stats.benign << " (" << std::fixed << std::setprecision(2) << get_pct(stats.benign) << "%),\n";
+    csv << ",,,,\n"; // Spacer
+    csv << "---,---,---,---\n";
+    csv << "STATS,TOTAL INJECTIONS," << stats.total_injected << ",,\n";
+    csv << "STATS,CRASHED," << stats.crashed << " (" << std::fixed << std::setprecision(2) << get_pct(stats.crashed) << "%),,\n";
+    csv << "STATS,HANGED," << stats.hanged << " (" << std::fixed << std::setprecision(2) << get_pct(stats.hanged) << "%),,\n";
+    csv << "STATS,SDC," << stats.sdc << " (" << std::fixed << std::setprecision(2) << get_pct(stats.sdc) << "%),,\n";
+    csv << "STATS,BENIGN," << stats.benign << " (" << std::fixed << std::setprecision(2) << get_pct(stats.benign) << "%),,\n";
+    
+    // --- FAILURE BREAKDOWN TABLE ---
+    csv << ",,,,\n"; // Spacer
+    csv << "BREAKDOWN BY LOCATION,,,,\n";
+    csv << "TYPE,TOTAL,REGISTER,MEMORY,\n";
+    csv << "CRASH," << stats.crashed << "," << stats.crashed_reg << "," << stats.crashed_mem << ",\n";
+    csv << "HANG," << stats.hanged << "," << stats.hanged_reg << "," << stats.hanged_mem << ",\n";
+    csv << "SDC," << stats.sdc << "," << stats.sdc_reg << "," << stats.sdc_mem << ",\n";
+    csv << "BENIGN," << stats.benign << "," << stats.benign_reg << "," << stats.benign_mem << ",\n";
 
     csv.close();
 
     std::cout << "\nAnalysis Complete.\n";
     std::cout << "Total:   " << stats.total_injected << "\n";
-    std::cout << "Crashed: " << stats.crashed << "\n";
-    std::cout << "Hanged:  " << stats.hanged << "\n";
-    std::cout << "SDC:     " << stats.sdc << "\n";
-    std::cout << "Benign:  " << stats.benign << "\n";
+    std::cout << "Crashed: " << stats.crashed << " (Reg: " << stats.crashed_reg << ", Mem: " << stats.crashed_mem << ")\n";
+    std::cout << "Hanged:  " << stats.hanged  << " (Reg: " << stats.hanged_reg  << ", Mem: " << stats.hanged_mem  << ")\n";
+    std::cout << "SDC:     " << stats.sdc     << " (Reg: " << stats.sdc_reg     << ", Mem: " << stats.sdc_mem     << ")\n";
     std::cout << "Summary saved to: " << summary_path << std::endl;
 }
