@@ -11,7 +11,7 @@
       //"path": "{base_path}/test_inject",
 
       "defaults": {
-        "runs": 20,
+        "runs": 20000,
         "weight_mem": 19
       },
 
@@ -19,23 +19,29 @@
         {
           //"value": "{base_path}/python/fbimage.bmp   {campaign}/injection_{run}/fbgauss.bmp   -f blur --iters 2 --disk-roundtrip --workfile /tmp/work.bmp"
           "value": "{base_path}/pythonvenv/venv/digit_0.png"
+        },
+        {
+          "value": "{base_path}/pythonvenv/venv/digit_1.png"
+        },
+        {
+          "value": "{base_path}/pythonvenv/venv/digit_2.png"
+        },
+        {
+          "value": "{base_path}/pythonvenv/venv/digit_4.png"
         }
-        // {
-        //   "value": "digit_1.png"
-        // },
-        // {
-        //   "value": "digit_2.png"
-        // },
-        // {
-        //   "value": "digit_4.png"
-        // }
+      ]
+    },
+    { 
+      "path": "{base_path}/pythonvenv/venv/yolo.py",
+      "defaults": {
+        "runs": 20000
+      },
+      "args":[ 
+        {"value": "{base_path}/pythonvenv/venv/image1.jpg"},
+        {"value": "{base_path}/pythonvenv/venv/image2.jpg"},
+        {"value": "{base_path}/pythonvenv/venv/image3.jpg"},
+        {"value": "{base_path}/pythonvenv/venv/image4.jpg"}
       ]
     }
-    // { "path": "/home/andrea/Desktop/test/processes",
-    //   "defaults": {
-    //     "reg":"rbx"
-    //   },
-    //   "args":[ {"value": "2 2 2"} ]
-    // }
   ]
 }

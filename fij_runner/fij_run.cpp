@@ -142,11 +142,6 @@ CampaignResult run_injection_campaign(
             set_cstring(per_run_params.log_path, run_log_path.string());
             per_run_params.iteration_number = i;
 
-            // Make sure this is a "no injection" baseline if your struct has such a field.
-            // If not, you can ignore this line or adapt to your actual flag.
-            // per_run_params.no_injection = 1;
-
-            // Use the non-blocking ioctl path (same core primitive as Phase 2).
             // max_delay_ms = 0 here: baseline, no injection window needed.
             auto [dt, res] = fij_detail::run_send_and_poll(
                 device,
