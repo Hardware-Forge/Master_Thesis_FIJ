@@ -4,7 +4,6 @@ SUDO        ?= sudo
 CONFIGJSON  ?= ./fij_runner/config.json #relative path from the directory of this file
 
 KMOD_DIR        := fij
-USER_DIR        := fij_command
 RUNNERCPP_DIR   := fij_runner
 
 # --- Detect Package Manager ---
@@ -88,21 +87,6 @@ start:
 	./fij_runner/fij_app $(CONFIGJSON)
 
 ############################
-# Userspace delegation     #
-############################
-build-user:
-	@$(MAKE) -C $(USER_DIR) $(if $(INCDIRS),INCDIRS="$(INCDIRS)")
-
-install-user:
-	@$(MAKE) -C $(USER_DIR) $(if $(INCDIRS),INCDIRS="$(INCDIRS)") install
-
-uninstall-user:
-	@$(MAKE) -C $(USER_DIR) uninstall
-
-clean-user:
-	@$(MAKE) -C $(USER_DIR) clean
-
-############################
 # fij_runnercpp build/clean#
 ############################
 build-runnercpp:
@@ -120,9 +104,7 @@ install:
 	@$(MAKE) install-module
 	@$(MAKE) build-runnercpp
 
-# Reverse order on uninstall: remove userspace, then module
 uninstall:
-	@$(MAKE) uninstall-user
 	@$(MAKE) remove-module
 	@$(MAKE) clean
 

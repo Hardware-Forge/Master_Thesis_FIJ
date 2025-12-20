@@ -3,45 +3,49 @@
   "base_path": "/home/andrea/Desktop",
   "defaults": {
     "runs": 1,
-    "weight_mem": 15
+    "weight_mem": 0
   },
   "targets": [
     {
-      "path": "{base_path}/pythonvenv/venv/mnist.py",
-      //"path": "{base_path}/test_inject",
+      "path": "{base_path}/OBPMark-master/bin/1.1-image/obpmark-1.1-image_cpu",
 
       "defaults": {
-        "runs": 20000,
-        "weight_mem": 19
+        "runs": 20000
       },
 
       "args": [
         {
-          //"value": "{base_path}/python/fbimage.bmp   {campaign}/injection_{run}/fbgauss.bmp   -f blur --iters 2 --disk-roundtrip --workfile /tmp/work.bmp"
-          "value": "{base_path}/pythonvenv/venv/digit_0.png"
-        },
-        {
-          "value": "{base_path}/pythonvenv/venv/digit_1.png"
-        },
-        {
-          "value": "{base_path}/pythonvenv/venv/digit_2.png"
-        },
-        {
-          "value": "{base_path}/pythonvenv/venv/digit_4.png"
+          "value": "-F {base_path}/OBPMark-master/data/input_data/1.1-image/1024 -w 1024 -h 1024 -f 1 -o"
         }
-      ]
+      ]      
     },
-    { 
-      "path": "{base_path}/pythonvenv/venv/yolo.py",
+    {
+      "path": "{base_path}/OBPMark-master/bin/1.1-image/obpmark-1.1-image_cpu",
+
       "defaults": {
-        "runs": 20000
+        "runs": 20000,
+        "weight_mem": 1
       },
-      "args":[ 
-        {"value": "{base_path}/pythonvenv/venv/image1.jpg"},
-        {"value": "{base_path}/pythonvenv/venv/image2.jpg"},
-        {"value": "{base_path}/pythonvenv/venv/image3.jpg"},
-        {"value": "{base_path}/pythonvenv/venv/image4.jpg"}
-      ]
+
+      "args": [
+        {
+          "value": "-F {base_path}/OBPMark-master/data/input_data/1.1-image/1024 -w 1024 -h 1024 -f 1 -o"
+        }
+      ]      
+    },
+    {
+      "path": "{base_path}/OBPMark-master/bin/1.1-image/obpmark-1.1-image_cpu",
+
+      "defaults": {
+        "runs": 20000,
+        "only_mem": 1
+      },
+
+      "args": [
+        {
+          "value": "-F {base_path}/OBPMark-master/data/input_data/1.1-image/1024 -w 1024 -h 1024 -f 1 -o"
+        }
+      ]      
     }
   ]
 }
