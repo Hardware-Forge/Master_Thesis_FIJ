@@ -6,7 +6,7 @@
 #include "fij_config.h"
 
 #define FIJ_DEVICE_NAME "fij"
-#define FIJ_MAX_ARGC    4
+#define FIJ_MAX_ARGC    128
 
 enum fij_reg_id {
     FIJ_REG_NONE = 0,
