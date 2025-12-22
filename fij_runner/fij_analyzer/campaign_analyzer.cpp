@@ -127,7 +127,7 @@ void analyze_injection_campaign(fs::path base_path) {
 
     std::cout << "Reference: " << golden_dir << "\nStarting analysis...\n";
 
-    int i = 1;
+    int i = 0;
     while (true) {
         fs::path inj_dir = base_path / ("injection_" + std::to_string(i));
         if (!fs::exists(inj_dir)) break;
