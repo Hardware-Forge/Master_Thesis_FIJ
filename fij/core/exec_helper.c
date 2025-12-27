@@ -24,7 +24,7 @@ static int helper_child_init(struct subprocess_info *info, struct cred *new)
     /* If the log file's path is specified by the userspace the STOUT AND STDERR are associated to it */
     if(path && path[0]!= "\0") {
         /* 2. Open the Log File */
-        log_file = filp_open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+        log_file = filp_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (IS_ERR(log_file)) {
             pr_err("fij: Failed to open log file: %s\n", path);
             return PTR_ERR(log_file);

@@ -225,78 +225,86 @@ CampaignResult run_injection_campaign(
 
     #pragma omp parallel for num_threads(num_threads) schedule(dynamic)
     for (int i = 0; i < runs; ++i) {
-        try {
-            fs::path run_dir = campaign_path / ("injection_" + std::to_string(i));
 
-            // create_directories is not guaranteed thread-safe on the same path,
-            // but here each run_dir is unique; still, you can optionally guard it:
-            fs::create_directories(run_dir);
+        bool successful_injection = false;
 
-            std::string expanded_args = args_template;
-            {
-                std::string campaign_placeholder = "{campaign}";
-                std::string run_placeholder      = "{run}";
-                std::string campaign_str         = campaign_path.string();
-                std::string run_str              = std::to_string(i);
+        while (!successful_injection) {
 
-                std::size_t pos = 0;
-                while ((pos = expanded_args.find(campaign_placeholder, pos)) != std::string::npos) {
-                    expanded_args.replace(pos, campaign_placeholder.size(), campaign_str);
-                    pos += campaign_str.size();
-                }
-                pos = 0;
-                while ((pos = expanded_args.find(run_placeholder, pos)) != std::string::npos) {
-                    expanded_args.replace(pos, run_placeholder.size(), run_str);
-                    pos += run_str.size();
-                }
-            }
-
-            struct fij_params per_run_params = base_params;  // per-iteration copy
-            set_cstring(per_run_params.process_args, expanded_args);
-
-            fs::path run_log_path = run_dir / "log.txt";
-            set_cstring(per_run_params.log_path, run_log_path.string());
-            per_run_params.iteration_number = i;
-
-            auto [dt, res] = fij_detail::run_send_and_poll(
-                device,
-                per_run_params,
-                i,
-                max_delay_ms,
-                0,              // no_injection = 0, the function has to inject a fault
-                pre_delay_ms,
-                max_retries,
-                retry_delay_ms
-            );
-
-            // Each thread writes a different slot: no race on inj_times/inj_results
-            inj_times[i]   = dt;
-            inj_results[i] = res;
-
-            
-            if ( (i + 1) % 100 == 0 || i == runs - 1 ) {
-                std::cout << "dt=" << dt
-                        << "s, target=" << res.target_tgid
-                        << ", duration=" << res.injection_time_ns
-                        << ", ec=" << res.exit_code
-                        << " iteration number = " << res.iteration_number << "\n";
-
-                
-
-                if (verbose) {
-                    std::cout << "  Injection run " << (i + 1) << "/" << runs
-                            << ": " << (dt * 1000.0) << " ms\n";
-                }
-            }
-
-            log_injection_iteration(campaign_path, i, dt, res);
-            
-        } catch (const std::system_error &e) {
-            if (verbose) {
-                #pragma omp critical(fij_io)
+            try {
+                fs::path run_dir = campaign_path / ("injection_" + std::to_string(i));
+    
+                fs::create_directories(run_dir);
+    
+                std::string expanded_args = args_template;
                 {
-                    std::cerr << "  Injection run " << (i + 1)
-                            << " failed: " << e.what() << "\n";
+                    std::string campaign_placeholder = "{campaign}";
+                    std::string run_placeholder      = "{run}";
+                    std::string campaign_str         = campaign_path.string();
+                    std::string run_str              = std::to_string(i);
+    
+                    std::size_t pos = 0;
+                    while ((pos = expanded_args.find(campaign_placeholder, pos)) != std::string::npos) {
+                        expanded_args.replace(pos, campaign_placeholder.size(), campaign_str);
+                        pos += campaign_str.size();
+                    }
+                    pos = 0;
+                    while ((pos = expanded_args.find(run_placeholder, pos)) != std::string::npos) {
+                        expanded_args.replace(pos, run_placeholder.size(), run_str);
+                        pos += run_str.size();
+                    }
+                }
+    
+                struct fij_params per_run_params = base_params;  // per-iteration copy
+                set_cstring(per_run_params.process_args, expanded_args);
+    
+                fs::path run_log_path = run_dir / "log.txt";
+                set_cstring(per_run_params.log_path, run_log_path.string());
+                per_run_params.iteration_number = i;
+    
+                auto [dt, res] = fij_detail::run_send_and_poll(
+                    device,
+                    per_run_params,
+                    i,
+                    max_delay_ms,
+                    0,              // no_injection = 0, the function has to inject a fault
+                    pre_delay_ms,
+                    max_retries,
+                    retry_delay_ms
+                );
+
+                if( res.fault_injected ) {
+
+                    successful_injection = true;
+
+                    inj_times[i]   = dt;
+                    inj_results[i] = res;
+        
+                    if ( (i + 1) % 100 == 0 || i == runs - 1 ) {
+                        std::cout << "dt=" << dt
+                                << "s, target=" << res.target_tgid
+                                << ", duration=" << res.injection_time_ns
+                                << ", ec=" << res.exit_code
+                                << " iteration number = " << res.iteration_number << "\n";
+        
+                        
+        
+                        if (verbose) {
+                            std::cout << "  Injection run " << (i + 1) << "/" << runs
+                                    << ": " << (dt * 1000.0) << " ms\n";
+                        }
+                    }
+        
+                    log_injection_iteration(campaign_path, i, dt, res);
+                }
+    
+                
+            } catch (const std::system_error &e) {
+                if (verbose) {
+                    #pragma omp critical(fij_io)
+                    {
+                        std::cerr << "  Injection run " << (i + 1)
+                                << " failed: " << e.what() << "\n";
+                    }
                 }
             }
         }
