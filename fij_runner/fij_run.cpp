@@ -218,9 +218,9 @@ CampaignResult run_injection_campaign(
 
     // decide how many threads to use
     int num_threads = max_workers;
-    if (num_threads <= 0 || num_threads < max_workers) {
+    if (num_threads <= 0) {
         // fallback to OpenMP default if max_workers is not set/negative
-        num_threads = std::max(1, omp_get_max_threads() / 2);
+        num_threads = std::max(1, omp_get_max_threads());
     }
 
     #pragma omp parallel for num_threads(num_threads) schedule(dynamic)
