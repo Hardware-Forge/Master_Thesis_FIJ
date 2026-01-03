@@ -44,6 +44,7 @@ The `config.json` file controls injection campaigns. **All paths must be absolut
   "workers": 4,      //workers is the number of threads that the user wants to use to parallelize the injections
   "base_path": "/home/andrea/Desktop",          //this is a helper parameter to specify paths more easily. The reason is that in this file the FULL PATHS have
                                                 //be specified
+  "baseline_runs": 200 ,                        //--> optional parameter. If not applied the baseline_runs are 100
   "defaults": {                                 ///
     "runs": 1,                                  ///--->this default can be used to run the injection with some specific parameters. This applies the params to all campaigns
     "weight_mem": 15                            ///
@@ -93,6 +94,7 @@ The `config.json` file controls injection campaigns. **All paths must be absolut
 #### Global Settings
 - **`workers`**: Number of parallel threads for injection execution
 - **`base_path`**: Helper variable for constructing full paths (use `{base_path}` in paths)
+- **`baseline_runs`**: Number of baseline runs to determine average run time of the process. It is **<span style="color: orange;">OPTIONAL</span>** and if not specified 100 baseline runs are executed
 - **`defaults`**: Default parameters applied to all campaigns (can be overridden per target)
 
 #### Target Settings
