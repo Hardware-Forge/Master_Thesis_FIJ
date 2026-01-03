@@ -107,7 +107,14 @@ CampaignResult run_injection_campaign(
     baseline_times.reserve(baseline_runs);
     baseline_results.reserve(baseline_runs);
 
-    #pragma omp parallel for num_threads(std::max(1, omp_get_max_threads() / 2)) schedule(dynamic)
+    // decide how many threads to use
+    int num_threads = max_workers;
+    if (num_threads <= 0) {
+        // fallback to OpenMP default if max_workers is not set/negative
+        num_threads = std::max(1, omp_get_max_threads());
+    }
+
+    #pragma omp parallel for num_threads(num_threads) schedule(dynamic)
     for (int i = 0; i < baseline_runs; ++i) {
         try {
             // Per-run directory: ../fij_logs/<campaign>/no_inj/injection_i
@@ -215,13 +222,6 @@ CampaignResult run_injection_campaign(
 
     std::vector<double> inj_times(runs, -1.0);
     std::vector<struct fij_result> inj_results(runs);
-
-    // decide how many threads to use
-    int num_threads = max_workers;
-    if (num_threads <= 0) {
-        // fallback to OpenMP default if max_workers is not set/negative
-        num_threads = std::max(1, omp_get_max_threads());
-    }
 
     #pragma omp parallel for num_threads(num_threads) schedule(dynamic)
     for (int i = 0; i < runs; ++i) {
