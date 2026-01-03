@@ -5,7 +5,6 @@
 void run_campaigns_from_config(
     const std::string &config_path,
     const std::string &device,
-    int baseline_runs,
     int pre_delay_ms,
     int max_retries,
     int retry_delay_ms,
@@ -21,6 +20,7 @@ void run_campaigns_from_config(
         const auto &job = jobs[idx];
         if (verbose) {
             std::cout << "\n[+] Running job " << (idx + 1) << "/" << jobs.size() << ":\n"
+                      << "\n  baseline_runs = " << job.baseline_runs << "\n"
                       << "    path   = " << job.path << "\n"
                       << "    args   = " << job.args << "\n"
                       << "    runs   = " << job.runs << "\n";
@@ -30,7 +30,7 @@ void run_campaigns_from_config(
             device,
             job.params,
             job.runs,
-            baseline_runs,
+            job.baseline_runs,
             pre_delay_ms,
             max_retries,
             retry_delay_ms,

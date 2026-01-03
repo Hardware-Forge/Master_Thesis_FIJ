@@ -4,6 +4,7 @@ std::vector<FijJob> build_fij_jobs_from_config(const json &config) {
     json global_defaults = config.value("defaults", json::object());
     json targets         = config.value("targets",  json::array());
     std::string base_path = config.value("base_path", std::string());
+    int baseline_runs    = config.value("baseline_runs", 100);
     int workers = config.value("workers", 1);
 
     std::vector<FijJob> jobs;
@@ -119,6 +120,7 @@ std::vector<FijJob> build_fij_jobs_from_config(const json &config) {
             job.path    = path;
             job.args    = arg_val;
             job.runs    = runs;
+            job.baseline_runs = baseline_runs;
             job.params  = p;
             job.workers = workers;
             jobs.push_back(job);

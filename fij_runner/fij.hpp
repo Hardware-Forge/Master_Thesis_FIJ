@@ -84,6 +84,7 @@ struct FijJob {
     std::string path;      // executable path
     std::string args;      // argument string
     int runs;              // number of runs
+    int baseline_runs;
     struct fij_params params;
     int workers;
 };
@@ -142,7 +143,6 @@ CampaignResult run_injection_campaign(
 void run_campaigns_from_config(
     const std::string &config_path,
     const std::string &device      = "/dev/fij",
-    int baseline_runs              = 100,
     int pre_delay_ms               = 50,
     int max_retries                = 5,
     int retry_delay_ms             = 50,
