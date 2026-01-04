@@ -7,6 +7,7 @@
 #include <iomanip>
 #include <opencv2/opencv.hpp>
 #include <nlohmann/json.hpp>
+#include <omp.h>
 
 using json = nlohmann::json;
 namespace fs = std::filesystem;
@@ -113,7 +114,7 @@ struct CsvRecord {
     std::string json_file;
 };
 
-void analyze_injection_campaign(fs::path base_path) {
+void analyze_injection_campaign(fs::path base_path, int expected_runs) {
     fs::path golden_dir = base_path / "no_inj/injection_0";
     fs::path diff_root = base_path / "diff";
 
@@ -125,12 +126,24 @@ void analyze_injection_campaign(fs::path base_path) {
     std::vector<CsvRecord> csv_records;
     AnalyzeStats stats;
 
-    std::cout << "Reference: " << golden_dir << "\nStarting analysis...\n";
+    std::cout << "Reference: " << golden_dir << "\nStarting analysis (" << expected_runs << " expected runs)...\n";
 
-    int i = 0;
-    while (true) {
+    // Use OpenMP to parallelize the loop
+    // 'stats' and 'csv_records' must be protected
+    #pragma omp parallel for schedule(dynamic)
+    for (int i = 0; i < expected_runs; ++i) {
+        
+        // --- LOCAL VARS ---
+        CsvRecord local_rec; 
+        bool rec_valid = false;
+        
+        // --- LOCAL STATS Delta ---
+        // (We calculate delta for this run and merge at the end)
+        // Simplification: we just use a critical section at the end of iteration
+        // to update the global stats struct.
+
         fs::path inj_dir = base_path / ("injection_" + std::to_string(i));
-        if (!fs::exists(inj_dir)) break;
+        if (!fs::exists(inj_dir)) continue;
 
         std::string current_json_filename = "injection_" + std::to_string(i) + ".json";
         fs::path json_path = inj_dir / current_json_filename;
@@ -138,35 +151,39 @@ void analyze_injection_campaign(fs::path base_path) {
         // 1. Load JSON
         std::ifstream json_file(json_path);
         if (!json_file.good()) {
-            csv_records.push_back({std::to_string(i), "ERROR", "UNKNOWN", "JSON missing/corrupt", current_json_filename});
-            stats.errors++;
-            i++; continue;
+            #pragma omp critical(stats_update)
+            {
+                csv_records.push_back({std::to_string(i), "ERROR", "UNKNOWN", "JSON missing/corrupt", current_json_filename});
+                stats.errors++;
+            }
+            continue;
         }
 
         json meta_data;
         try {
             json_file >> meta_data;
         } catch (const std::exception& e) {
-            csv_records.push_back({std::to_string(i), "ERROR", "UNKNOWN", "JSON Parse Error", current_json_filename});
-            stats.errors++;
-            i++; continue;
+            #pragma omp critical(stats_update)
+            {
+                csv_records.push_back({std::to_string(i), "ERROR", "UNKNOWN", "JSON Parse Error", current_json_filename});
+                stats.errors++;
+            }
+            continue;
         }
 
         // 2. Filter Logic
         auto& res_block = meta_data["result"];
         if (res_block.value("fault_injected", 0) != 1) {
-            i++; continue;
+            continue;
         }
 
         // 3. Determine Location (Memory vs Register)
-        // Check "result" block first, then root, defaulting to 0 (Register) if missing
         int mem_flip_val = res_block.value("memory_flip", -1);
         if(mem_flip_val == -1) mem_flip_val = meta_data.value("memory_flip", 0);
 
         bool is_memory = (mem_flip_val == 1);
         std::string loc_str = is_memory ? "Memory" : "Register";
 
-        stats.total_injected++;
         int exit_code = res_block.value("exit_code", 0);
         int process_hanged = res_block.value("process_hanged", 0);
 
@@ -179,13 +196,9 @@ void analyze_injection_campaign(fs::path base_path) {
         if (exit_code != 0) {
             if (process_hanged == 1) {
                 status_type = "HANG";
-                stats.hanged++;
-                if (is_memory) stats.hanged_mem++; else stats.hanged_reg++;
                 status_details = "Exit: " + std::to_string(exit_code) + ", Hanged: 1";
             } else {
                 status_type = "CRASH";
-                stats.crashed++;
-                if (is_memory) stats.crashed_mem++; else stats.crashed_reg++;
                 status_details = "Exit: " + std::to_string(exit_code);
             }
         } else {
@@ -239,9 +252,6 @@ void analyze_injection_campaign(fs::path base_path) {
 
             if (sdc_detected) {
                 status_type = "SDC";
-                stats.sdc++;
-                if (is_memory) stats.sdc_mem++; else stats.sdc_reg++;
-                
                 for(size_t k=0; k<details_list.size(); ++k) {
                     status_details += details_list[k];
                     if(k < details_list.size()-1) status_details += " | ";
@@ -249,20 +259,33 @@ void analyze_injection_campaign(fs::path base_path) {
             }
         }
 
-        // 5. Logging & CSV Update
-        if (status_type == "BENIGN") {
-            stats.benign++;
-            if (is_memory) stats.benign_mem++; else stats.benign_reg++;
-        } else {
-            if (!fs::exists(experiment_diff_dir)) {
-                fs::create_directories(experiment_diff_dir);
+        // 5. Update shared stats
+        #pragma omp critical(stats_update)
+        {
+            stats.total_injected++;
+            if (status_type == "BENIGN") {
+                stats.benign++;
+                if (is_memory) stats.benign_mem++; else stats.benign_reg++;
+            } else if (status_type == "HANG") {
+                stats.hanged++;
+                if (is_memory) stats.hanged_mem++; else stats.hanged_reg++;
+            } else if (status_type == "CRASH") {
+                stats.crashed++;
+                if (is_memory) stats.crashed_mem++; else stats.crashed_reg++;
+            } else if (status_type == "SDC") {
+                stats.sdc++;
+                if (is_memory) stats.sdc_mem++; else stats.sdc_reg++;
             }
-            fs::copy_file(json_path, experiment_diff_dir / current_json_filename, fs::copy_options::overwrite_existing);
 
-            // Add Record (Now includes loc_str)
-            csv_records.push_back({std::to_string(i), status_type, loc_str, status_details, current_json_filename});
+            if (status_type != "BENIGN") {
+                if (!fs::exists(experiment_diff_dir)) {
+                    fs::create_directories(experiment_diff_dir);
+                }
+                fs::copy_file(json_path, experiment_diff_dir / current_json_filename, fs::copy_options::overwrite_existing);
+
+                csv_records.push_back({std::to_string(i), status_type, loc_str, status_details, current_json_filename});
+            }
         }
-        i++;
     }
 
     // 6. Final Report (CSV)
@@ -272,6 +295,8 @@ void analyze_injection_campaign(fs::path base_path) {
     // Updated Header
     csv << "index,type,location,details,json_file\n";
     
+    // csv_records order is no longer guaranteed to be 0..N, but that's fine for CSV. 
+    // If needed we could sort them.
     for (const auto& rec : csv_records) {
         csv << rec.index << "," << rec.type << "," << rec.location << "," << "\"" << rec.details << "\"" << "," << rec.json_file << "\n";
     }

@@ -14,7 +14,7 @@ std::pair<double, struct fij_result> run_with_retries(
     const struct fij_params &base_params,
     bool no_injection,
     int max_delay_ms,
-    int pre_delay_ms   = 50,
+    int pre_delay_ms   = 0,
     int max_retries    = 5,
     int retry_delay_ms = 50
 );
@@ -25,10 +25,10 @@ std::pair<double, struct fij_result> run_send_and_poll(
     int iteration_index,
     int max_delay_ms,
     int no_injection,
-    int pre_delay_ms     = 50,
+    int pre_delay_ms     = 0,
     int max_retries      = 5,
     int retry_delay_ms   = 50,
-    int poll_interval_ms = 5
+    int poll_interval_ms = 1
 );
 
 } // namespace fij_detail

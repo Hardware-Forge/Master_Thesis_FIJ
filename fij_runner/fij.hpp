@@ -143,7 +143,7 @@ CampaignResult run_injection_campaign(
 void run_campaigns_from_config(
     const std::string &config_path,
     const std::string &device      = "/dev/fij",
-    int pre_delay_ms               = 50,
+    int pre_delay_ms               = 0,
     int max_retries                = 5,
     int retry_delay_ms             = 50,
     bool verbose                   = true
@@ -153,5 +153,5 @@ void run_campaigns_from_config(
 // Campaign Analyzer
 // --------------------------------------------------------------------------
 
-void analyze_injection_campaign(fs::path base_path_str);
+void analyze_injection_campaign(fs::path base_path_str, int expected_runs);
 
