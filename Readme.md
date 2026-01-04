@@ -194,7 +194,7 @@ The example below will consider the target folder in Desktop
     {
       "path": "{base_path}/coremark-main/coremark.exe",
       "args": [
-        { "value": "0x0 0x0 0x66 0 7 1 2000" }
+        { "value": "0x0 0x0 0x66 400000 7 1 2000" }
       ]
     }
   ]
@@ -313,7 +313,7 @@ Scenario: We want to run multiple programs by configuring the config.json file w
         "runs": 500,
       },
       "args": [
-        { "value": "0x0 0x0 0x66 0 7 1 2000" }
+        { "value": "0x0 0x0 0x66 400000 7 1 2000" }
       ]
     }
   ]
@@ -322,7 +322,7 @@ Scenario: We want to run multiple programs by configuring the config.json file w
 in this config file we are running first a campaign of 1000 iterations with 90% chance of injection in memory for the image_blur script, then a campaign of the mnist.py script of 20000 iterations with 50% chance of memory injections and in the end we are running a campaign of 500 iterations of the coremark.exe program with chance of injection in memory equal to 90%.
 
 ## Notes
-
+- **If the program that is being tested prints non deterministic parameters such as the execution time the analysis performed will likely show an absurd amout of Silent Data Corruptions (SDC). Before proceding the user should edit the program**
 - All paths in `config.json` must be absolute paths
 - Use `{base_path}` variable to simplify path specification
 - Target-specific defaults override global defaults
