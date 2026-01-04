@@ -42,6 +42,10 @@ CampaignResult run_injection_campaign(
     if (baseline_runs <= 0) {
         throw std::invalid_argument("baseline_runs must be > 0");
     }
+    // here the baseline runs are manually fixed to minimum 3. the first 2 runs are not considered since they are warmup runs
+    if (baseline_runs <= 2) {
+        baseline_runs = 3;
+    }
 
     std::string label = label_from_params(base_params);
 
