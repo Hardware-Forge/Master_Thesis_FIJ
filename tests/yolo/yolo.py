@@ -7,7 +7,10 @@ import os
 import sys
 
 # Configuration
-MODEL_PATH = "/home/andrea/Desktop/pythonvenv/venv/yolov7-tiny_640x640.onnx"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Construct the full path to the model file in that same directory
+MODEL_PATH = os.path.join(SCRIPT_DIR, "yolov7-tiny_640x640.onnx")
 
 def letterbox(img, new_shape=(640, 640), color=(114, 114, 114)):
     # You MUST still resize the image, or the model will crash.
