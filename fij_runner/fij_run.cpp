@@ -201,7 +201,7 @@ CampaignResult run_injection_campaign(
     for (size_t i = 2; i < baseline_times.size(); ++i) {
         tot_time += baseline_times[i];
     }
-    double avg_s  = tot_time / baseline_times.size();
+    double avg_s  = tot_time / (baseline_times.size() - 2);
     double avg_ms = avg_s * 1000.0;
 
     int max_delay_ms = static_cast<int>(std::round(avg_ms));
