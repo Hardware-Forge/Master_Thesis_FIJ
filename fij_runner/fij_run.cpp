@@ -90,6 +90,16 @@ CampaignResult run_injection_campaign(
             if (i > 0) logs_folder += "_";
             logs_folder += parts[i];
         }
+
+        // Fix long filenames
+        if (logs_folder.length() > 100) {
+            std::hash<std::string> hasher;
+            std::size_t h = hasher(logs_folder);
+            std::stringstream ss;
+            ss << std::hex << h;
+            // truncate original string but keep hash for uniqueness
+            logs_folder = logs_folder.substr(0, 100) + "_" + ss.str();
+        }
     }
 
     fs::path campaign_path = create_dir_in_path("../fij_logs", logs_folder);

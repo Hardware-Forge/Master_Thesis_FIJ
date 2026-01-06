@@ -7,6 +7,8 @@ MODULE_AUTHOR("Andrea Carbonetti");
 MODULE_DESCRIPTION("Runtime-controlled Fault Injection Kernel Module");
 MODULE_VERSION("0.2");
 
+DECLARE_WAIT_QUEUE_HEAD(fij_mon_wq);
+
 void fij_ctx_init(struct fij_ctx *ctx)
 {
     memset(ctx, 0, sizeof(*ctx));

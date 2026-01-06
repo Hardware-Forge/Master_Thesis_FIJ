@@ -16,7 +16,7 @@
 
 #include "fij_regs.h"
 
-static DECLARE_WAIT_QUEUE_HEAD(fij_mon_wq);
+extern wait_queue_head_t fij_mon_wq;
 
 
 /* Forward decl */

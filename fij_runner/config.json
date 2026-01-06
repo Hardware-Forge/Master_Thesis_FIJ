@@ -1,16 +1,16 @@
 {
-  "workers": 20,
+  "workers": 16,
   "base_path": "/home/ubuntu",
   "defaults": {
-    "runs": 10000,
+    "runs": 1000,
     "weight_mem": 1
   },
   "targets": [
     {
-      "path": "{base_path}/coremark/coremark.exe",
+      "path": "{base_path}/Master_Thesis_FIJ/tests/coremark/coremark.exe",
       "args": [
         {
-          "value": "0x0 0x0 0x66 0 7 1 2000"
+          "value": "0x0 0x0 0x66 800000 7 1 2000"
         }
       ]
     }
