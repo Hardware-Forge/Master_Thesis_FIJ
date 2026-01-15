@@ -1,18 +1,28 @@
 {
-  "workers": 20,
-  "base_path": "/home/ubuntu",
-  "defaults": {
-    "runs": 1000,
-    "weight_mem": 1
-  },
-  "targets": [
-    {
-      "path": "{base_path}/Master_Thesis_FIJ/tests/mnist/mnist.py",
-      "args": [
+    "workers": 20,
+    "base_path": "/home/ubuntu",
+    "defaults": {
+        "runs": 1000,
+        "weight_mem": 1
+    },
+    "targets": [
         {
-          "value": "{base_path}/Master_Thesis_FIJ/tests/mnist/digit_0.png"
+            "path": "{base_path}/Master_Thesis_FIJ/tests/audiomark/build/audiomark"
+        },
+        {
+            "path": "{base_path}/Master_Thesis_FIJ/tests/audiomark/build/audiomark"
+        },
+        {
+            "path": "{base_path}/Master_Thesis_FIJ/tests/audiomark/build/audiomark"
+        },
+        {
+            "path": "{base_path}/Master_Thesis_FIJ/tests/audiomark/build/audiomark"
+        },
+        {
+            "path": "{base_path}/Master_Thesis_FIJ/tests/audiomark/build/audiomark"
+        },
+        {
+            "path": "{base_path}/Master_Thesis_FIJ/tests/audiomark/build/audiomark"
         }
-      ]
-    }
-  ]
+    ]
 }

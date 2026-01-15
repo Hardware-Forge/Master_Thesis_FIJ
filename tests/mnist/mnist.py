@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/home/ubuntu/venv/bin/python3
 import onnxruntime as ort
 import numpy as np
 from PIL import Image
