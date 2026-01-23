@@ -108,6 +108,35 @@ The `config.json` file controls injection campaigns. **All paths must be absolut
   - `weight_mem=19` → 5% (1/20) probability of register injection
   - `weight_mem=15` → 6.25% (1/16) probability of register injection
   - **<span style="color: red;">If not specified, injections only target registers</span>**
+ 
+### Injection Parameters Logic
+The tool decides whether to inject a fault into a **CPU Register** or **System Memory** based on the `weight_mem` parameter. The selection logic works as follows:
+
+* **Register Weight:** Fixed at `1`.
+* **Memory Weight:** Defined by `weight_mem`.
+* **Total Weight:** `1 + weight_mem`.
+
+The probability is calculated as:
+$$P(Register) = \frac{1}{1 + weight\_mem}$$
+$$P(Memory) = \frac{weight\_mem}{1 + weight\_mem}$$
+
+*Note: If `only_mem` is set to `1`, this logic is bypassed and injections target memory 100% of the time.*
+*Note: If `weight_mem` is not specified, the default value is `0`.*
+
+#### Probability Table
+
+Use this table to choose the correct `weight_mem` for your desired distribution:
+
+| `weight_mem` | Register Probability | Memory Probability | Ratio (Reg : Mem) |
+| :--- | :--- | :--- | :--- |
+| **0** | **100%** | **0%** | Only Registers |
+| **1** | **50%** | **50%** | 1 : 1 |
+| **3** | **25%** | **75%** | 1 : 3 |
+| **4** | **20%** | **80%** | 1 : 4 |
+| **9** | **10%** | **90%** | 1 : 9 |
+| **15** | **6.25%** | **93.75%** | 1 : 15 |
+| **19** | **5%** | **95%** | 1 : 19 |
+| **99** | **1%** | **99%** | 1 : 99 |
 
 ### Output Redirection
 
