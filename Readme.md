@@ -1,10 +1,10 @@
-# FIJ - Fault Injection Tool
+# XL-FI: A Linux Kernel-based Cross-Layer Fault Injection Framework
 
-FIJ is a kernel-space fault injection tool designed for running automated injection campaigns on target programs.
+XL-FI is a kernel-space fault injection tool designed for running automated injection campaigns on target programs.
 
 ## Overview
 
-FIJ consists of two main components:
+XL-FI consists of two main components:
 - **User-space program**: Reads configuration and automates injection calls
 - **Kernel-space module**: Executes programs and handles fault injection
 
